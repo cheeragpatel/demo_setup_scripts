@@ -1,0 +1,27 @@
+{
+  "name": "workshop-repo-setup",
+  "version": "1.0.0",
+  "description": "Script to create demo repositories for workshop attendees",
+  "main": "setup-repos.js",
+  "scripts": {
+    "start": "node setup-repos.js",
+    "validate": "node validate-config.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "github",
+    "workshop",
+    "demo",
+    "repository"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@octokit/rest": "^20.0.2",
+    "csv-parser": "^3.0.0",
+    "dotenv": "^16.3.1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
