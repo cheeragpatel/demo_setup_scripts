@@ -29,6 +29,8 @@ class WorkshopRepoSetup {
       skipped: [],
       failed: []
     };
+    // Store the original working directory to return to later
+    this.originalWorkingDir = process.cwd();
   }
 
   async validateConfig() {
@@ -195,14 +197,14 @@ class WorkshopRepoSetup {
       }
       
       // Clean up - go back to original directory
-      process.chdir('/Users/cheeragpatel/Documents/git/demo-setup-scripts');
+      process.chdir(this.originalWorkingDir);
       
       console.log(`✅ Successfully cloned repository content`);
       
     } catch (error) {
       // Make sure we're back in the original directory even if there's an error
       try {
-        process.chdir('/Users/cheeragpatel/Documents/git/demo-setup-scripts');
+        process.chdir(this.originalWorkingDir);
       } catch (chdirError) {
         console.warn('Failed to change back to original directory');
       }
