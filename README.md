@@ -4,12 +4,15 @@ This script automatically creates demo repositories for workshop attendees by fo
 
 ## Features
 
-- 🍴 Forks a source repository for each attendee
-- 🌿 Creates required branches (`main`, `feature-add-tos-download`, `feature-add-cart-page`)
+- 📦 Creates complete duplicate repositories (not forks) for each attendee with **internal visibility**
+- 🌿 Copies all branches from source repository (`main`, `feature-add-tos-download`, `feature-add-cart-page`)
+- 📋 Preserves all files, commit history, and branch structure
 - 👤 Adds attendees as admin collaborators to their repositories
 - ⏭️ Skips repositories that already exist
+- 🧹 **Cleanup functionality to delete all workshop repositories**
 - 📊 Provides detailed progress reporting and summary
 - 💾 Saves results to a JSON file for record keeping
+- 🔍 Dry-run mode for cleanup to preview what will be deleted
 
 ## Prerequisites
 
@@ -85,7 +88,9 @@ If the feature branches don't exist in the source repository, the script will cr
 
 ## Running the Script
 
-### Basic Usage
+### Repository Setup
+
+Create repositories for all attendees:
 
 ```bash
 npm start
@@ -97,15 +102,54 @@ Or directly with Node.js:
 node setup-repos.js
 ```
 
-### What the Script Does
+### Repository Cleanup
+
+⚠️ **WARNING: Cleanup will permanently delete repositories and cannot be undone!**
+
+#### Dry Run (Recommended First)
+Preview what repositories will be deleted without actually deleting them:
+
+```bash
+npm run cleanup:dry-run
+```
+
+#### Actual Cleanup
+Delete all workshop repositories:
+
+```bash
+npm run cleanup
+```
+
+Or with alternative commands:
+
+```bash
+# Using the cleanup script directly
+node cleanup-repos.js
+
+# Using the main script with cleanup flag
+node setup-repos.js --cleanup
+```
+
+### What the Cleanup Script Does
+
+The cleanup process will:
+
+1. 🔍 Scan the target organization for repositories matching the pattern `{source-repo}-{github-username}`
+2. 📋 Display a list of repositories that will be deleted with their details
+3. ⚠️ Require explicit confirmation (you must type "DELETE" to proceed)
+4. 🗑️ Delete each repository permanently
+5. 📊 Provide a detailed summary of the cleanup results
+
+### What the Setup Script Does
 
 For each attendee, the script will:
 
 1. 🔍 Check if repository `{source-repo}-{github-username}` already exists
-2. 🍴 Fork the source repository to the target organization
-3. 🌿 Create the required branches from the source repository
-4. 👤 Add the attendee as an admin collaborator
-5. ✅ Report success or ❌ log any errors
+2. 📦 Create a new empty repository in the target organization with **internal visibility**
+3. 🔄 Clone all content, branches, and commit history from the source repository using efficient git commands
+4. 🌿 Push only the required branches (`main`, `feature-add-tos-download`, `feature-add-cart-page`)
+5. 👤 Add the attendee as an admin collaborator
+6. ✅ Report success or ❌ log any errors
 
 ### Example Output
 
@@ -121,12 +165,24 @@ For each attendee, the script will:
 📊 Progress: 1/5
 
 🚀 Setting up repository for johndoe...
-🍴 Forking repository to workshop-2024/workshop-demo-johndoe...
-⏳ Waiting for repository workshop-demo-johndoe to be ready...
-✅ Repository is ready
-🌿 Creating required branches for workshop-demo-johndoe...
-  ✅ Created branch: feature-add-tos-download
-  ✅ Created branch: feature-add-cart-page
+📦 Creating duplicate repository workshop-2024/workshop-demo-johndoe...
+✅ Created empty repository: workshop-2024/workshop-demo-johndoe
+🔄 Cloning content from my-company/workshop-demo...
+📋 Cloning 3 required branches: main, feature-add-tos-download, feature-add-cart-page
+🌿 Cloning branch: main (first branch)...
+  📄 Processing 25 files...
+  🔄 Processing files 1-20...
+  🔄 Processing files 21-25...
+  ✅ Successfully processed 25 files
+  ✅ Cloned branch: main (25 files)
+🌿 Cloning branch: feature-add-tos-download...
+  📄 Processing 26 files...
+  ✅ Successfully processed 26 files
+  ✅ Cloned branch: feature-add-tos-download (26 files)
+🌿 Cloning branch: feature-add-cart-page...
+  📄 Processing 28 files...
+  ✅ Successfully processed 28 files
+  ✅ Cloned branch: feature-add-cart-page (28 files)
 👤 Adding johndoe as owner of workshop-demo-johndoe...
 ✅ Added johndoe as admin collaborator
 ✅ Successfully set up repository: workshop-2024/workshop-demo-johndoe
@@ -134,13 +190,17 @@ For each attendee, the script will:
 
 ## Output Files
 
-The script generates:
+The scripts generate:
 
 1. **Console output**: Real-time progress and status updates
-2. **Results JSON file**: `setup-results-YYYY-MM-DD.json` with detailed results including:
+2. **Setup Results**: `setup-results-YYYY-MM-DD.json` with detailed results including:
    - Successfully created repositories with URLs
    - Skipped repositories (if they already existed)
    - Failed repositories with error details
+3. **Cleanup Results**: `cleanup-results-YYYY-MM-DD.json` with detailed cleanup results including:
+   - Successfully deleted repositories
+   - Repositories not found (may have been already deleted)
+   - Failed deletions with error details
 
 ## Troubleshooting
 
@@ -195,8 +255,9 @@ Or modify the configuration object in `setup-repos.js` for more permanent change
 
 - Keep your GitHub token secure and never commit it to version control
 - The `.env` file is already in `.gitignore`
-- Attendees will receive admin access to their repositories
-- Consider the implications of forking private repositories
+- Attendees will receive admin access to their duplicate repositories
+- Consider the implications of duplicating private repositories (all content will be copied)
+- Workshop attendees will NOT see any connection to the original repository (unlike forks)
 
 ## Support
 

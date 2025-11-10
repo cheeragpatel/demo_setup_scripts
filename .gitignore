@@ -9,6 +9,7 @@ yarn-error.log*
 
 # Results files
 setup-results-*.json
+cleanup-results-*.json
 
 # Actual attendee data
 attendees.csv

@@ -6,6 +6,8 @@
   "scripts": {
     "start": "node setup-repos.js",
     "validate": "node validate-config.js",
+    "cleanup": "node cleanup-repos.js",
+    "cleanup:dry-run": "node cleanup-repos.js --dry-run",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [

@@ -29,6 +29,15 @@ npm run validate
 npm start
 ```
 
+### 6. Clean Up After Workshop (Optional)
+```bash
+# Preview what will be deleted (recommended first)
+npm run cleanup:dry-run
+
+# Actually delete the repositories
+npm run cleanup
+```
+
 ## 📋 Required Information
 
 Before running the script, you need:
@@ -66,9 +75,21 @@ janesmith,jane.smith@example.com
 
 For each attendee, the script will:
 1. Create `{source-repo}-{github-username}` repository
-2. Fork from your source repository
-3. Create required branches: `main`, `feature-add-tos-download`, `feature-add-cart-page`
+2. Duplicate all content from your source repository (not a fork)
+3. Copy all branches with complete history
 4. Add the attendee as an admin collaborator
+
+## 🧹 Cleanup Commands
+
+After your workshop, you can clean up all created repositories:
+
+```bash
+# See what would be deleted (safe preview)
+npm run cleanup:dry-run
+
+# Actually delete repositories (requires confirmation)
+npm run cleanup
+```
 
 ## 🆘 Need Help?
 

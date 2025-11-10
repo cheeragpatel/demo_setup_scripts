@@ -102,98 +102,221 @@ class WorkshopRepoSetup {
     }
   }
 
-  async forkRepository(newRepoName) {
-    console.log(`🍴 Forking repository to ${CONFIG.targetOrg}/${newRepoName}...`);
+  async createDuplicateRepository(newRepoName) {
+    console.log(`📦 Creating duplicate repository ${CONFIG.targetOrg}/${newRepoName}...`);
     
-    const response = await octokit.rest.repos.createFork({
+    // Get source repository details
+    const sourceRepo = await octokit.rest.repos.get({
       owner: CONFIG.sourceOrg,
-      repo: CONFIG.sourceRepo,
-      organization: CONFIG.targetOrg,
-      name: newRepoName
+      repo: CONFIG.sourceRepo
     });
 
-    // Wait for fork to be ready
-    await this.waitForRepo(newRepoName);
+    // Create new empty repository with internal visibility
+    const response = await octokit.rest.repos.createInOrg({
+      org: CONFIG.targetOrg,
+      name: newRepoName,
+      description: `Workshop copy of ${sourceRepo.data.description || CONFIG.sourceRepo}`,
+      visibility: 'internal', // Set to internal visibility
+      has_issues: true,
+      has_projects: true,
+      has_wiki: false,
+      auto_init: false // Important: don't initialize with README
+    });
+
+    console.log(`✅ Created empty repository: ${CONFIG.targetOrg}/${newRepoName}`);
+    
+    // Clone and push repository content using git commands
+    await this.cloneRepositoryWithGit(newRepoName, response.data.clone_url);
     
     return response.data;
   }
 
-  async waitForRepo(repoName, maxAttempts = 30) {
-    console.log(`⏳ Waiting for repository ${repoName} to be ready...`);
+  async cloneRepositoryWithGit(newRepoName, targetCloneUrl) {
+    console.log(`🔄 Cloning repository content using git commands...`);
     
-    for (let i = 0; i < maxAttempts; i++) {
-      try {
-        const repo = await octokit.rest.repos.get({
-          owner: CONFIG.targetOrg,
-          repo: repoName
-        });
-        
-        if (!repo.data.fork || repo.data.size > 0) {
-          console.log('✅ Repository is ready');
-          return repo.data;
-        }
-      } catch (error) {
-        if (error.status !== 404) {
-          throw error;
+    const tempDir = `/tmp/workshop-clone-${Date.now()}`;
+    const sourceUrl = `https://github.com/${CONFIG.sourceOrg}/${CONFIG.sourceRepo}.git`;
+    
+    try {
+      // Clone the source repository (not mirror, just regular clone)
+      console.log(`📥 Cloning source repository: ${CONFIG.sourceOrg}/${CONFIG.sourceRepo}`);
+      await this.runGitCommand(`git clone ${sourceUrl} ${tempDir}`);
+      
+      // Change to the cloned directory
+      process.chdir(tempDir);
+      
+      // Fetch all branches
+      await this.runGitCommand('git fetch --all');
+      
+      // Set the new remote URL for pushing
+      const targetUrlWithAuth = targetCloneUrl.replace('https://', `https://${CONFIG.githubToken}@`);
+      await this.runGitCommand(`git remote add target ${targetUrlWithAuth}`);
+      
+      // Push only the required branches
+      console.log(`📤 Pushing required branches: ${CONFIG.requiredBranches.join(', ')}`);
+      
+      for (const branch of CONFIG.requiredBranches) {
+        try {
+          // Check if branch exists locally or remotely
+          let branchExists = false;
+          try {
+            await this.runGitCommand(`git show-ref --verify --quiet refs/heads/${branch}`);
+            branchExists = true;
+            console.log(`  📋 Branch ${branch} exists locally`);
+          } catch {
+            try {
+              await this.runGitCommand(`git show-ref --verify --quiet refs/remotes/origin/${branch}`);
+              console.log(`  📋 Branch ${branch} exists on remote, checking out locally`);
+              await this.runGitCommand(`git checkout -b ${branch} origin/${branch}`);
+              branchExists = true;
+            } catch {
+              console.log(`  ⚠️ Branch ${branch} not found in source repository`);
+            }
+          }
+          
+          if (branchExists) {
+            console.log(`  📤 Pushing branch: ${branch}`);
+            await this.runGitCommand(`git push target ${branch}:${branch}`);
+          }
+        } catch (error) {
+          console.warn(`  ⚠️ Failed to push branch ${branch}: ${error.message}`);
         }
       }
       
-      await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+      // Set main as default branch if it exists
+      if (CONFIG.requiredBranches.includes('main')) {
+        try {
+          await this.runGitCommand('git checkout main');
+          await this.runGitCommand('git push target HEAD:refs/heads/main');
+        } catch (error) {
+          console.warn(`  ⚠️ Could not set main as default: ${error.message}`);
+        }
+      }
+      
+      // Clean up - go back to original directory
+      process.chdir('/Users/cheeragpatel/Documents/git/demo-setup-scripts');
+      
+      console.log(`✅ Successfully cloned repository content`);
+      
+    } catch (error) {
+      // Make sure we're back in the original directory even if there's an error
+      try {
+        process.chdir('/Users/cheeragpatel/Documents/git/demo-setup-scripts');
+      } catch (chdirError) {
+        console.warn('Failed to change back to original directory');
+      }
+      
+      console.error(`❌ Git operations failed: ${error.message}`);
+      throw error;
+    } finally {
+      // Clean up temporary directory
+      try {
+        await this.runGitCommand(`rm -rf ${tempDir}`);
+      } catch (cleanupError) {
+        console.warn(`⚠️ Failed to clean up temporary directory: ${tempDir}`);
+      }
     }
-    
-    throw new Error(`Repository ${repoName} not ready after ${maxAttempts} attempts`);
   }
 
-  async createRequiredBranches(repoName) {
-    console.log(`🌿 Creating required branches for ${repoName}...`);
+  async runGitCommand(command) {
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
     
-    // Get the main branch SHA
-    const mainBranch = await octokit.rest.repos.getBranch({
-      owner: CONFIG.targetOrg,
-      repo: repoName,
-      branch: 'main'
-    });
+    console.log(`  🔧 Running: ${command.replace(CONFIG.githubToken, '***')}`);
     
-    const mainSha = mainBranch.data.commit.sha;
+    try {
+      const { stdout, stderr } = await execAsync(command);
+      if (stderr && !stderr.includes('warning:') && !stderr.includes('Cloning into')) {
+        console.log(`  ℹ️ Git output: ${stderr}`);
+      }
+      return stdout;
+    } catch (error) {
+      console.error(`  ❌ Command failed: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async ensureRequiredBranchesExist(repoName) {
+    console.log(`🌿 Verifying required branches exist in ${repoName}...`);
     
-    // Create each required branch (skip main as it already exists)
-    for (const branch of CONFIG.requiredBranches) {
-      if (branch === 'main') continue;
+    try {
+      // Get all branches from the target repository
+      const branches = await octokit.rest.repos.listBranches({
+        owner: CONFIG.targetOrg,
+        repo: repoName,
+        per_page: 100
+      });
       
-      try {
-        // Check if branch exists in source repo
-        const sourceBranch = await octokit.rest.repos.getBranch({
-          owner: CONFIG.sourceOrg,
-          repo: CONFIG.sourceRepo,
-          branch: branch
-        });
-        
-        // Create branch in target repo using the SHA from source
-        await octokit.rest.git.createRef({
-          owner: CONFIG.targetOrg,
-          repo: repoName,
-          ref: `refs/heads/${branch}`,
-          sha: sourceBranch.data.commit.sha
-        });
-        
-        console.log(`  ✅ Created branch: ${branch}`);
-      } catch (error) {
-        if (error.status === 422 && error.message.includes('already exists')) {
-          console.log(`  ℹ️ Branch ${branch} already exists`);
-        } else if (error.status === 404) {
-          console.log(`  ⚠️ Branch ${branch} not found in source repo, creating from main`);
+      const existingBranches = branches.data.map(b => b.name);
+      const missingBranches = CONFIG.requiredBranches.filter(b => !existingBranches.includes(b));
+      
+      if (missingBranches.length === 0) {
+        console.log(`  ✅ All required branches exist: ${CONFIG.requiredBranches.join(', ')}`);
+        return;
+      }
+      
+      console.log(`  🔧 Creating missing branches: ${missingBranches.join(', ')}`);
+      
+      // Get main branch (or first available branch) to create missing branches from
+      const baseBranch = existingBranches.includes('main') 
+        ? branches.data.find(b => b.name === 'main')
+        : branches.data[0];
+      
+      if (!baseBranch) {
+        console.log(`  ⚠️ No base branch found to create missing branches from`);
+        return;
+      }
+      
+      // Create missing branches
+      for (const branch of missingBranches) {
+        try {
           await octokit.rest.git.createRef({
             owner: CONFIG.targetOrg,
             repo: repoName,
             ref: `refs/heads/${branch}`,
-            sha: mainSha
+            sha: baseBranch.commit.sha
           });
-        } else {
-          throw error;
+          console.log(`    ✅ Created branch: ${branch}`);
+        } catch (error) {
+          console.log(`    ⚠️ Failed to create branch ${branch}: ${error.message}`);
         }
+      }
+      
+    } catch (error) {
+      console.error(`❌ Failed to verify branches: ${error.message}`);
+      // Don't throw here - this is not critical to the main functionality
+    }
+  }
+
+
+
+  async createOrUpdateRef(owner, repo, branch, sha) {
+    try {
+      // Try to create new reference
+      await octokit.rest.git.createRef({
+        owner: owner,
+        repo: repo,
+        ref: `refs/heads/${branch}`,
+        sha: sha
+      });
+    } catch (refError) {
+      // If reference already exists, update it
+      if (refError.status === 422 && refError.message.includes('already exists')) {
+        await octokit.rest.git.updateRef({
+          owner: owner,
+          repo: repo,
+          ref: `heads/${branch}`,
+          sha: sha
+        });
+      } else {
+        throw refError;
       }
     }
   }
+
+
+
 
   async addCollaborator(repoName, username) {
     console.log(`👤 Adding ${username} as owner of ${repoName}...`);
@@ -232,11 +355,11 @@ class WorkshopRepoSetup {
         return;
       }
 
-      // Fork the repository
-      await this.forkRepository(repoName);
+      // Create duplicate repository
+      await this.createDuplicateRepository(repoName);
 
-      // Create required branches
-      await this.createRequiredBranches(repoName);
+      // Ensure any missing required branches are created
+      await this.ensureRequiredBranchesExist(repoName);
 
       // Add attendee as collaborator
       await this.addCollaborator(repoName, attendee.githubUsername);
@@ -332,6 +455,21 @@ class WorkshopRepoSetup {
     fs.writeFileSync(resultsFile, JSON.stringify(this.results, null, 2));
     console.log(`\n💾 Detailed results saved to: ${resultsFile}`);
   }
+}
+
+// CLI argument parsing
+const args = process.argv.slice(2);
+const cleanup = args.includes('--cleanup') || args.includes('-c');
+
+if (cleanup) {
+  console.log('🧹 Cleanup mode detected - redirecting to cleanup script...\n');
+  const WorkshopRepoCleanup = require('./cleanup-repos');
+  const cleanupInstance = new WorkshopRepoCleanup();
+  cleanupInstance.run().catch(error => {
+    console.error('💥 Unexpected error:', error);
+    process.exit(1);
+  });
+  return;
 }
 
 // Run the script
