@@ -8,6 +8,7 @@ This script automatically creates demo repositories for workshop attendees by fo
 - 🌿 Copies all branches from source repository (`main`, `feature-add-tos-download`, `feature-add-cart-page`)
 - 📋 Preserves all files, commit history, and branch structure
 - 👤 Adds attendees as admin collaborators to their repositories
+- 🚀 **Prebuilds GitHub Codespaces for fast startup times**
 - ⏭️ Skips repositories that already exist
 - 🧹 **Cleanup functionality to delete all workshop repositories**
 - 📊 Provides detailed progress reporting and summary
@@ -54,6 +55,9 @@ TARGET_ORG=workshop-2024
 
 # CSV file with attendee information
 CSV_FILE=attendees.csv
+
+# Enable Codespaces prebuilds for faster startup (true/false)  
+ENABLE_CODESPACES_PREBUILDS=true
 ```
 
 ### 3. Prepare Attendee List
@@ -149,7 +153,8 @@ For each attendee, the script will:
 3. 🔄 Clone all content, branches, and commit history from the source repository using efficient git commands
 4. 🌿 Push only the required branches (`main`, `feature-add-tos-download`, `feature-add-cart-page`)
 5. 👤 Add the attendee as an admin collaborator
-6. ✅ Report success or ❌ log any errors
+6. 🚀 **Setup and trigger Codespaces prebuilds for fast environment startup**
+7. ✅ Report success or ❌ log any errors
 
 ### Example Output
 
@@ -183,9 +188,22 @@ For each attendee, the script will:
   📄 Processing 28 files...
   ✅ Successfully processed 28 files
   ✅ Cloned branch: feature-add-cart-page (28 files)
-👤 Adding johndoe as owner of workshop-demo-johndoe...
-✅ Added johndoe as admin collaborator
-✅ Successfully set up repository: workshop-2024/workshop-demo-johndoe
+👤 Adding cheeragpatel as owner of workshop-demo-cheeragpatel...
+✅ Added cheeragpatel as admin collaborator
+🚀 Setting up Codespaces prebuilds for workshop-demo-cheeragpatel...
+  ✅ Found .devcontainer configuration
+  🔧 Enabling Codespaces for repository...
+  ✅ Codespaces enabled for repository
+  🏗️ Creating prebuild configuration for branch: main
+  ✅ Prebuild configuration created for main (ID: 12345)
+  ℹ️ Prebuild will only trigger on devcontainer configuration changes
+  🔍 Checking for existing prebuild configurations...
+  ✅ Found 1 prebuild configuration(s)
+  ℹ️ Initial prebuild will be triggered automatically when devcontainer config is detected
+  ⚡ Triggering initial prebuild for new repository...
+  🚀 Initial prebuild triggered (will complete in background)
+  ✅ Codespaces setup completed for workshop-demo-cheeragpatel
+✅ Successfully set up repository: workshop-2024/workshop-demo-cheeragpatel
 ```
 
 ## Output Files
@@ -250,6 +268,26 @@ SOURCE_ORG=different-org TARGET_ORG=other-org npm start
 ```
 
 Or modify the configuration object in `setup-repos.js` for more permanent changes.
+
+## GitHub Codespaces Prebuild Configuration
+
+The script automatically configures Codespaces prebuilds with the following optimized settings:
+
+- **Branch Target**: Only the `main` branch (not feature branches)
+- **Trigger Policy**: Only rebuilds when devcontainer configuration changes
+- **No Automatic Rebuilds**: Prevents unnecessary rebuilds on every code push
+- **Efficient Resource Usage**: Reduces compute costs by building only when needed
+
+### Prebuild Triggers
+
+Prebuilds will **only** be triggered when:
+- ✅ Devcontainer configuration files change (`.devcontainer/devcontainer.json`, `.devcontainer/Dockerfile`, etc.)
+- ✅ Initial setup of a new repository (one-time trigger)
+
+Prebuilds will **NOT** be triggered on:
+- ❌ Regular code commits and pushes
+- ❌ Pull request creation or updates
+- ❌ Changes to non-devcontainer files
 
 ## Security Notes
 

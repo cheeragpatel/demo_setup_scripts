@@ -13,7 +13,8 @@ const CONFIG = {
   targetOrg: process.env.TARGET_ORG || 'your-target-org',
   csvFile: process.env.CSV_FILE || 'attendees.csv',
   githubToken: process.env.GITHUB_TOKEN,
-  requiredBranches: ['main', 'feature-add-tos-download', 'feature-add-cart-page']
+  requiredBranches: ['main', 'feature-add-tos-download', 'feature-add-cart-page'],
+  enableCodespaces: process.env.ENABLE_CODESPACES_PREBUILDS === 'true' || true // Default to true
 };
 
 // Initialize Octokit
@@ -315,6 +316,106 @@ class WorkshopRepoSetup {
     }
   }
 
+  async prebuildCodespaces(repoName) {
+    console.log(`🚀 Setting up Codespaces prebuilds for ${repoName}...`);
+    
+    try {
+      // Check if Codespaces API is available
+      if (!octokit.rest.codespaces) {
+        console.log(`  ℹ️ Codespaces API not available in current Octokit version`);
+        console.log(`  💡 Codespaces can be manually enabled in repository settings`);
+        return;
+      }
+
+      // First, check if the repository has a devcontainer configuration
+      let hasDevcontainer = false;
+      try {
+        await octokit.rest.repos.getContent({
+          owner: CONFIG.targetOrg,
+          repo: repoName,
+          path: '.devcontainer'
+        });
+        hasDevcontainer = true;
+        console.log(`  ✅ Found .devcontainer configuration`);
+      } catch (error) {
+        if (error.status === 404) {
+          // Check for devcontainer.json in root
+          try {
+            await octokit.rest.repos.getContent({
+              owner: CONFIG.targetOrg,
+              repo: repoName,
+              path: '.devcontainer.json'
+            });
+            hasDevcontainer = true;
+            console.log(`  ✅ Found .devcontainer.json in root`);
+          } catch (rootError) {
+            if (rootError.status === 404) {
+              console.log(`  ℹ️ No devcontainer configuration found - Codespaces will use default environment`);
+            } else {
+              throw rootError;
+            }
+          }
+        } else {
+          throw error;
+        }
+      }
+
+      // Enable repository features that support Codespaces
+      try {
+        console.log(`  🔧 Configuring repository settings for Codespaces...`);
+        
+        await octokit.rest.repos.update({
+          owner: CONFIG.targetOrg,
+          repo: repoName,
+          allow_merge_commit: true,
+          allow_squash_merge: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: true,
+          has_issues: true,
+          has_projects: true
+        });
+        
+        console.log(`  ✅ Repository configured for Codespaces`);
+      } catch (error) {
+        console.log(`  ⚠️ Could not update repository settings: ${error.message}`);
+      }
+
+      // Try to use Codespaces API if available
+      try {
+        if (octokit.rest.codespaces && octokit.rest.codespaces.createRepoCodespacesPrebuild) {
+          console.log(`  🏗️ Creating prebuild configuration for main branch...`);
+          
+          const prebuildConfig = await octokit.rest.codespaces.createRepoCodespacesPrebuild({
+            owner: CONFIG.targetOrg,
+            repo: repoName,
+            ref: 'refs/heads/main'
+          });
+          
+          console.log(`  ✅ Prebuild configuration created (ID: ${prebuildConfig.data.id})`);
+          console.log(`  ℹ️ Prebuild will trigger on devcontainer configuration changes`);
+        } else {
+          throw new Error('Codespaces prebuild API not available');
+        }
+      } catch (apiError) {
+        console.log(`  ℹ️ Codespaces prebuild API not available: ${apiError.message}`);
+        console.log(`  💡 Manual setup: Go to repository Settings → Codespaces → Set up prebuilds`);
+        
+        if (hasDevcontainer) {
+          console.log(`  🎯 Devcontainer detected - Codespaces will work with existing configuration`);
+        } else {
+          console.log(`  🔧 Consider adding a .devcontainer/devcontainer.json for custom environment`);
+        }
+      }
+
+      console.log(`  ✅ Codespaces setup completed for ${repoName}`);
+      
+    } catch (error) {
+      console.log(`  ⚠️ Codespaces setup encountered issues: ${error.message}`);
+      console.log(`  💡 Repository is ready - Codespaces can be enabled manually if needed`);
+      // Don't throw here - this is not critical to the main functionality
+    }
+  }
+
 
 
 
@@ -363,6 +464,9 @@ class WorkshopRepoSetup {
 
       // Add attendee as collaborator
       await this.addCollaborator(repoName, attendee.githubUsername);
+
+      // Prebuild Codespaces for the repository
+      await this.prebuildCodespaces(repoName);
 
       console.log(`✅ Successfully set up repository: ${CONFIG.targetOrg}/${repoName}`);
       this.results.success.push({

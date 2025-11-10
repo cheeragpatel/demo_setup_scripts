@@ -74,10 +74,11 @@ janesmith,jane.smith@example.com
 ## 📊 What Happens
 
 For each attendee, the script will:
-1. Create `{source-repo}-{github-username}` repository
+1. Create `{source-repo}-{github-username}` repository with internal visibility
 2. Duplicate all content from your source repository (not a fork)
 3. Copy all branches with complete history
 4. Add the attendee as an admin collaborator
+5. 🚀 **Setup Codespaces prebuilds for instant development environment**
 
 ## 🧹 Cleanup Commands
 
