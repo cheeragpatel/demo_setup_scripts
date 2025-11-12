@@ -9,11 +9,25 @@ This script automatically creates demo repositories for workshop attendees by fo
 - 📋 Preserves all files, commit history, and branch structure
 - 👤 Adds attendees as admin collaborators to their repositories
 - 🚀 **Prebuilds GitHub Codespaces for fast startup times**
+- ⚡ **Efficient caching**: Clones source repository once and reuses it for all attendees
 - ⏭️ Skips repositories that already exist
 - 🧹 **Cleanup functionality to delete all workshop repositories**
 - 📊 Provides detailed progress reporting and summary
 - 💾 Saves results to a JSON file for record keeping
 - 🔍 Dry-run mode for cleanup to preview what will be deleted
+
+## Performance Optimization
+
+The setup script uses an intelligent caching mechanism to avoid repeatedly cloning the source repository:
+
+- **First Run**: The source repository is cloned once to a persistent cache directory (`/tmp/workshop-source-cache-{org}-{repo}`)
+- **Subsequent Runs**: The cached repository is updated with `git fetch` instead of cloning from scratch
+- **Benefit**: Setting up repositories for N attendees only requires 1 clone + N pushes, instead of N clones + N pushes
+
+This optimization dramatically reduces:
+- ⏱️ Setup time (especially for large repositories or many attendees)
+- 🌐 Network bandwidth usage
+- 🔄 GitHub API traffic
 
 ## Prerequisites
 
@@ -148,13 +162,17 @@ The cleanup process will:
 
 For each attendee, the script will:
 
-1. 🔍 Check if repository `{source-repo}-{github-username}` already exists
-2. 📦 Create a new empty repository in the target organization with **internal visibility**
-3. 🔄 Clone all content, branches, and commit history from the source repository using efficient git commands
-4. 🌿 Push only the required branches (`main`, `feature-add-tos-download`, `feature-add-cart-page`)
-5. 👤 Add the attendee as an admin collaborator
-6. 🚀 **Setup and trigger Codespaces prebuilds for fast environment startup**
-7. ✅ Report success or ❌ log any errors
+1. 🗂️ **Initialize source repository cache** (one-time operation):
+   - On first run: Clone the source repository to a persistent cache directory
+   - On subsequent runs: Update the cached repository with `git fetch`
+   - This eliminates repeated cloning and significantly speeds up the setup process
+2. 🔍 Check if repository `{source-repo}-{github-username}` already exists
+3. 📦 Create a new empty repository in the target organization with **internal visibility**
+4. 🔄 Push all content, branches, and commit history from the cached source repository
+5. 🌿 Push only the required branches (`main`, `feature-add-tos-download`, `feature-add-cart-page`)
+6. 👤 Add the attendee as an admin collaborator
+7. 🚀 **Setup and trigger Codespaces prebuilds for fast environment startup**
+8. ✅ Report success or ❌ log any errors
 
 ### Example Output
 

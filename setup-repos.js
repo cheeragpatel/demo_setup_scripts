@@ -31,6 +31,8 @@ class WorkshopRepoSetup {
     };
     // Store the original working directory to return to later
     this.originalWorkingDir = process.cwd();
+    // Use a persistent cache directory for the source repository
+    this.sourceCacheDir = `/tmp/workshop-source-cache-${CONFIG.sourceOrg}-${CONFIG.sourceRepo}`;
   }
 
   async validateConfig() {
@@ -105,6 +107,43 @@ class WorkshopRepoSetup {
     }
   }
 
+  async initializeSourceCache() {
+    console.log(`🗂️ Initializing source repository cache...`);
+    
+    const sourceUrl = `https://github.com/${CONFIG.sourceOrg}/${CONFIG.sourceRepo}.git`;
+    const fs = require('fs');
+    
+    // Check if cache directory exists
+    if (fs.existsSync(this.sourceCacheDir)) {
+      console.log(`  ✅ Found existing cache at ${this.sourceCacheDir}`);
+      console.log(`  🔄 Updating cached repository...`);
+      
+      try {
+        // Change to cache directory and fetch updates
+        process.chdir(this.sourceCacheDir);
+        await this.runGitCommand('git fetch --all --prune');
+        console.log(`  ✅ Cache updated successfully`);
+      } catch (error) {
+        console.warn(`  ⚠️ Failed to update cache, will re-clone: ${error.message}`);
+        // If update fails, remove the cache and re-clone
+        process.chdir(this.originalWorkingDir);
+        await this.runGitCommand(`rm -rf ${this.sourceCacheDir}`);
+        await this.cloneSourceRepository(sourceUrl);
+      } finally {
+        process.chdir(this.originalWorkingDir);
+      }
+    } else {
+      // Clone for the first time
+      await this.cloneSourceRepository(sourceUrl);
+    }
+  }
+
+  async cloneSourceRepository(sourceUrl) {
+    console.log(`  📥 Cloning source repository: ${CONFIG.sourceOrg}/${CONFIG.sourceRepo}`);
+    await this.runGitCommand(`git clone ${sourceUrl} ${this.sourceCacheDir}`);
+    console.log(`  ✅ Source repository cached at ${this.sourceCacheDir}`);
+  }
+
   async createDuplicateRepository(newRepoName) {
     console.log(`📦 Creating duplicate repository ${CONFIG.targetOrg}/${newRepoName}...`);
     
@@ -128,31 +167,29 @@ class WorkshopRepoSetup {
 
     console.log(`✅ Created empty repository: ${CONFIG.targetOrg}/${newRepoName}`);
     
-    // Clone and push repository content using git commands
-    await this.cloneRepositoryWithGit(newRepoName, response.data.clone_url);
+    // Push repository content from cached source using git commands
+    await this.pushFromCachedSource(newRepoName, response.data.clone_url);
     
     return response.data;
   }
 
-  async cloneRepositoryWithGit(newRepoName, targetCloneUrl) {
-    console.log(`🔄 Cloning repository content using git commands...`);
-    
-    const tempDir = `/tmp/workshop-clone-${Date.now()}`;
-    const sourceUrl = `https://github.com/${CONFIG.sourceOrg}/${CONFIG.sourceRepo}.git`;
+  async pushFromCachedSource(newRepoName, targetCloneUrl) {
+    console.log(`🔄 Pushing repository content from cache...`);
     
     try {
-      // Clone the source repository (not mirror, just regular clone)
-      console.log(`📥 Cloning source repository: ${CONFIG.sourceOrg}/${CONFIG.sourceRepo}`);
-      await this.runGitCommand(`git clone ${sourceUrl} ${tempDir}`);
-      
-      // Change to the cloned directory
-      process.chdir(tempDir);
-      
-      // Fetch all branches
-      await this.runGitCommand('git fetch --all');
+      // Change to the cached source directory
+      process.chdir(this.sourceCacheDir);
       
       // Set the new remote URL for pushing
       const targetUrlWithAuth = targetCloneUrl.replace('https://', `https://${CONFIG.githubToken}@`);
+      
+      // Remove target remote if it exists from previous runs
+      try {
+        await this.runGitCommand('git remote remove target');
+      } catch (error) {
+        // Ignore error if remote doesn't exist
+      }
+      
       await this.runGitCommand(`git remote add target ${targetUrlWithAuth}`);
       
       // Push only the required branches
@@ -196,10 +233,17 @@ class WorkshopRepoSetup {
         }
       }
       
-      // Clean up - go back to original directory
+      // Clean up target remote
+      try {
+        await this.runGitCommand('git remote remove target');
+      } catch (error) {
+        // Ignore error
+      }
+      
+      // Go back to original directory
       process.chdir(this.originalWorkingDir);
       
-      console.log(`✅ Successfully cloned repository content`);
+      console.log(`✅ Successfully pushed repository content from cache`);
       
     } catch (error) {
       // Make sure we're back in the original directory even if there's an error
@@ -211,13 +255,6 @@ class WorkshopRepoSetup {
       
       console.error(`❌ Git operations failed: ${error.message}`);
       throw error;
-    } finally {
-      // Clean up temporary directory
-      try {
-        await this.runGitCommand(`rm -rf ${tempDir}`);
-      } catch (cleanupError) {
-        console.warn(`⚠️ Failed to clean up temporary directory: ${tempDir}`);
-      }
     }
   }
 
@@ -501,6 +538,9 @@ class WorkshopRepoSetup {
         console.log('⚠️ No attendees found in CSV file');
         return;
       }
+
+      // Initialize the source repository cache (clone once, reuse for all attendees)
+      await this.initializeSourceCache();
 
       // Process each attendee
       for (let i = 0; i < attendees.length; i++) {
