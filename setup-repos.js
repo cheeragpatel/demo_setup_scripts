@@ -314,14 +314,13 @@ class WorkshopRepoSetup {
       await this.copyDirectory(sourcePath, tempDir);
       
       // Initialize git repository
-      process.chdir(tempDir);
-      await this.runGitCommand('git init');
-      await this.runGitCommand('git config user.email "workshop@example.com"');
-      await this.runGitCommand('git config user.name "Workshop Setup"');
+      await this.runGitCommand('git init', tempDir);
+      await this.runGitCommand('git config user.email "workshop@example.com"', tempDir);
+      await this.runGitCommand('git config user.name "Workshop Setup"', tempDir);
       
       // Add all content and commit
-      await this.runGitCommand('git add -A');
-      await this.runGitCommand('git commit -m "Initial commit from release package"');
+      await this.runGitCommand('git add -A', tempDir);
+      await this.runGitCommand('git commit -m "Initial commit from release package"', tempDir);
       
       // Get all branches from source
       const branchDirs = await fsPromises.readdir(sourcePath);
@@ -336,48 +335,34 @@ class WorkshopRepoSetup {
           
           // Create and checkout branch
           if (branch !== 'main') {
-            await this.runGitCommand(`git checkout -b ${branch}`);
+            await this.runGitCommand(`git checkout -b ${branch}`, tempDir);
           }
           
           // Clear temp directory
-          await this.runGitCommand('git rm -rf .');
+          await this.runGitCommand('git rm -rf .', tempDir);
           
           // Copy branch content
           await this.copyDirectory(branchPath, tempDir);
           
           // Commit branch content
-          await this.runGitCommand('git add -A');
-          await this.runGitCommand(`git commit -m "Content for ${branch} branch" --allow-empty`);
+          await this.runGitCommand('git add -A', tempDir);
+          await this.runGitCommand(`git commit -m "Content for ${branch} branch" --allow-empty`, tempDir);
         }
       }
       
       // Push all branches
       const targetUrlWithAuth = targetCloneUrl.replace('https://', `https://${CONFIG.githubToken}@`);
-      await this.runGitCommand(`git remote add origin ${targetUrlWithAuth}`);
-      await this.runGitCommand('git push -u origin --all');
-      
-      // Return to original directory
-      process.chdir(this.originalWorkingDir);
+      await this.runGitCommand(`git remote add origin ${targetUrlWithAuth}`, tempDir);
+      await this.runGitCommand('git push -u origin --all', tempDir);
       
       console.log(`  ✅ Successfully populated repository from ${repoConfig.contentType}`);
       
     } catch (error) {
-      // Return to original directory on error
-      try {
-        process.chdir(this.originalWorkingDir);
-      } catch (chdirError) {
-        console.warn('Failed to change back to original directory');
-      }
-      
       console.error(`  ❌ Failed to populate repository: ${error.message}`);
       throw error;
     } finally {
       // Clean up temp directory
-      try {
-        await this.runGitCommand(`rm -rf ${tempDir}`);
-      } catch (cleanupError) {
-        console.warn(`  ⚠️ Failed to clean up temporary directory: ${tempDir}`);
-      }
+      await this.safeCleanup(tempDir);
     }
   }
 
@@ -400,15 +385,12 @@ class WorkshopRepoSetup {
       console.log(`📥 Cloning source repository: ${CONFIG.sourceOrg}/${CONFIG.sourceRepo}`);
       await this.runGitCommand(`git clone ${sourceUrl} ${tempDir}`);
       
-      // Change to the cloned directory
-      process.chdir(tempDir);
-      
       // Fetch all branches
-      await this.runGitCommand('git fetch --all');
+      await this.runGitCommand('git fetch --all', tempDir);
       
       // Set the new remote URL for pushing
       const targetUrlWithAuth = targetCloneUrl.replace('https://', `https://${CONFIG.githubToken}@`);
-      await this.runGitCommand(`git remote add target ${targetUrlWithAuth}`);
+      await this.runGitCommand(`git remote add target ${targetUrlWithAuth}`, tempDir);
       
       // Push only the required branches
       console.log(`📤 Pushing required branches: ${CONFIG.requiredBranches.join(', ')}`);
@@ -418,14 +400,14 @@ class WorkshopRepoSetup {
           // Check if branch exists locally or remotely
           let branchExists = false;
           try {
-            await this.runGitCommand(`git show-ref --verify --quiet refs/heads/${branch}`);
+            await this.runGitCommand(`git show-ref --verify --quiet refs/heads/${branch}`, tempDir);
             branchExists = true;
             console.log(`  📋 Branch ${branch} exists locally`);
           } catch {
             try {
-              await this.runGitCommand(`git show-ref --verify --quiet refs/remotes/origin/${branch}`);
+              await this.runGitCommand(`git show-ref --verify --quiet refs/remotes/origin/${branch}`, tempDir);
               console.log(`  📋 Branch ${branch} exists on remote, checking out locally`);
-              await this.runGitCommand(`git checkout -b ${branch} origin/${branch}`);
+              await this.runGitCommand(`git checkout -b ${branch} origin/${branch}`, tempDir);
               branchExists = true;
             } catch {
               console.log(`  ⚠️ Branch ${branch} not found in source repository`);
@@ -434,7 +416,7 @@ class WorkshopRepoSetup {
           
           if (branchExists) {
             console.log(`  📤 Pushing branch: ${branch}`);
-            await this.runGitCommand(`git push target ${branch}:${branch}`);
+            await this.runGitCommand(`git push target ${branch}:${branch}`, tempDir);
           }
         } catch (error) {
           console.warn(`  ⚠️ Failed to push branch ${branch}: ${error.message}`);
@@ -444,47 +426,35 @@ class WorkshopRepoSetup {
       // Set main as default branch if it exists
       if (CONFIG.requiredBranches.includes('main')) {
         try {
-          await this.runGitCommand('git checkout main');
-          await this.runGitCommand('git push target HEAD:refs/heads/main');
+          await this.runGitCommand('git checkout main', tempDir);
+          await this.runGitCommand('git push target HEAD:refs/heads/main', tempDir);
         } catch (error) {
           console.warn(`  ⚠️ Could not set main as default: ${error.message}`);
         }
       }
       
-      // Clean up - go back to original directory
-      process.chdir(this.originalWorkingDir);
-      
       console.log(`✅ Successfully cloned repository content`);
       
     } catch (error) {
-      // Make sure we're back in the original directory even if there's an error
-      try {
-        process.chdir(this.originalWorkingDir);
-      } catch (chdirError) {
-        console.warn('Failed to change back to original directory');
-      }
-      
       console.error(`❌ Git operations failed: ${error.message}`);
       throw error;
     } finally {
       // Clean up temporary directory
-      try {
-        await this.runGitCommand(`rm -rf ${tempDir}`);
-      } catch (cleanupError) {
-        console.warn(`⚠️ Failed to clean up temporary directory: ${tempDir}`);
-      }
+      await this.safeCleanup(tempDir);
     }
   }
 
-  async runGitCommand(command) {
+  async runGitCommand(command, cwd = null) {
     const { exec } = require('child_process');
     const { promisify } = require('util');
     const execAsync = promisify(exec);
     
-    console.log(`  🔧 Running: ${command.replace(CONFIG.githubToken, '***')}`);
+    const displayCommand = command.replace(CONFIG.githubToken, '***');
+    console.log(`  🔧 Running: ${displayCommand}${cwd ? ` (in ${cwd})` : ''}`);
     
     try {
-      const { stdout, stderr } = await execAsync(command);
+      const options = cwd ? { cwd } : {};
+      const { stdout, stderr } = await execAsync(command, options);
       if (stderr && !stderr.includes('warning:') && !stderr.includes('Cloning into')) {
         console.log(`  ℹ️ Git output: ${stderr}`);
       }
@@ -495,7 +465,19 @@ class WorkshopRepoSetup {
     }
   }
 
-
+  async safeCleanup(dirPath) {
+    // Safety check: only allow cleanup of temp directories
+    if (!dirPath.startsWith('/tmp/') && !dirPath.startsWith('./temp-')) {
+      console.warn(`  ⚠️ Refusing to delete path outside of safe temp directories: ${dirPath}`);
+      return;
+    }
+    
+    try {
+      await fsPromises.rm(dirPath, { recursive: true, force: true });
+    } catch (error) {
+      console.warn(`  ⚠️ Failed to clean up directory: ${dirPath} - ${error.message}`);
+    }
+  }
 
   async prebuildCodespaces(repoName) {
     console.log(`🚀 Setting up Codespaces prebuilds for ${repoName}...`);
@@ -779,7 +761,7 @@ class WorkshopRepoSetup {
       
       // Clean up extracted files
       console.log('\n🧹 Cleaning up...');
-      await this.runGitCommand(`rm -rf ${CONFIG.workingDir}`);
+      await this.safeCleanup(CONFIG.workingDir);
 
     } catch (error) {
       console.error('💥 Setup failed:', error.message);
