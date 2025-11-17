@@ -1,20 +1,30 @@
 #!/usr/bin/env node
 
+require('dotenv').config();
+
 const { Octokit } = require('@octokit/rest');
 const fs = require('fs');
+const fsPromises = require('fs').promises;
 const csv = require('csv-parser');
 const path = require('path');
-require('dotenv').config();
+const tar = require('tar');
 
 // Configuration - Update these variables as needed
 const CONFIG = {
-  sourceOrg: process.env.SOURCE_ORG || 'your-source-org',
-  sourceRepo: process.env.SOURCE_REPO || 'demo-repo',
+  releaseTarball: process.env.RELEASE_TARBALL || './release.tar.gz',
   targetOrg: process.env.TARGET_ORG || 'your-target-org',
   csvFile: process.env.CSV_FILE || 'attendees.csv',
   githubToken: process.env.GITHUB_TOKEN,
-  requiredBranches: ['main', 'feature-add-tos-download', 'feature-add-cart-page'],
-  enableCodespaces: process.env.ENABLE_CODESPACES_PREBUILDS === 'true' || true // Default to true
+  workingDir: process.env.WORKING_DIR || './temp-release-setup',
+  enableCodespaces: process.env.ENABLE_CODESPACES_PREBUILDS === 'true' || true, // Default to true
+  
+  // Performance & Rate Limiting
+  concurrentAttendees: parseInt(process.env.CONCURRENT_ATTENDEES || '3'), // Process N attendees at once
+  concurrentRepos: parseInt(process.env.CONCURRENT_REPOS || '2'), // Process N repos per attendee at once
+  delayBetweenBatches: parseInt(process.env.DELAY_BETWEEN_BATCHES || '2000'), // ms delay between batches
+  rateLimitBuffer: parseInt(process.env.RATE_LIMIT_BUFFER || '100'), // Keep this many API calls in reserve
+  retryAttempts: parseInt(process.env.RETRY_ATTEMPTS || '3'), // Number of retries for failed operations
+  retryDelay: parseInt(process.env.RETRY_DELAY || '5000') // ms delay between retries
 };
 
 // Initialize Octokit
@@ -31,39 +41,186 @@ class WorkshopRepoSetup {
     };
     // Store the original working directory to return to later
     this.originalWorkingDir = process.cwd();
+    
+    // Rate limit tracking
+    this.apiCallCount = 0;
+    this.lastRateLimitCheck = Date.now();
+    this.rateLimitInfo = {
+      limit: 5000,
+      remaining: 5000,
+      reset: Date.now() + 3600000
+    };
+  }
+
+  async checkRateLimit() {
+    try {
+      const { data } = await octokit.rest.rateLimit.get();
+      this.rateLimitInfo = {
+        limit: data.rate.limit,
+        remaining: data.rate.remaining,
+        reset: data.rate.reset * 1000
+      };
+      
+      const remainingCalls = this.rateLimitInfo.remaining;
+      const resetTime = new Date(this.rateLimitInfo.reset);
+      
+      console.log(`ℹ️  Rate Limit: ${remainingCalls}/${this.rateLimitInfo.limit} remaining (resets at ${resetTime.toLocaleTimeString()})`);
+      
+      // If we're running low on API calls, wait until reset
+      if (remainingCalls < CONFIG.rateLimitBuffer) {
+        const waitTime = this.rateLimitInfo.reset - Date.now();
+        if (waitTime > 0) {
+          console.log(`⏰ Rate limit low (${remainingCalls} remaining). Waiting ${Math.ceil(waitTime / 1000)}s until reset...`);
+          await this.sleep(waitTime + 1000); // Add 1s buffer
+          console.log('✅ Rate limit reset, continuing...');
+        }
+      }
+      
+      return remainingCalls;
+    } catch (error) {
+      console.warn(`⚠️  Could not check rate limit: ${error.message}`);
+      return 5000; // Assume we have calls available
+    }
+  }
+  
+  async waitIfNeeded() {
+    // Check rate limit every 10 API calls or every 5 minutes
+    const timeSinceLastCheck = Date.now() - this.lastRateLimitCheck;
+    if (this.apiCallCount >= 10 || timeSinceLastCheck > 300000) {
+      await this.checkRateLimit();
+      this.apiCallCount = 0;
+      this.lastRateLimitCheck = Date.now();
+    }
+  }
+  
+  sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+  
+  async retryOperation(operation, operationName, maxRetries = CONFIG.retryAttempts) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        // Check if it's a rate limit error
+        if (error.status === 403 && error.message.includes('rate limit')) {
+          console.log(`⏰ Rate limit hit during ${operationName}. Checking limits...`);
+          await this.checkRateLimit();
+          continue;
+        }
+        
+        // Check if it's a secondary rate limit (abuse detection)
+        if (error.status === 403 && error.message.includes('abuse')) {
+          const waitTime = Math.min(60000 * attempt, 300000); // Up to 5 minutes
+          console.log(`⏰ Secondary rate limit hit. Waiting ${waitTime / 1000}s before retry ${attempt}/${maxRetries}...`);
+          await this.sleep(waitTime);
+          continue;
+        }
+        
+        if (attempt === maxRetries) {
+          throw error;
+        }
+        
+        console.log(`⚠️  Attempt ${attempt}/${maxRetries} failed for ${operationName}: ${error.message}`);
+        await this.sleep(CONFIG.retryDelay * attempt); // Exponential backoff
+      }
+    }
   }
 
   async validateConfig() {
     console.log('🔍 Validating configuration...');
     
     if (!CONFIG.githubToken) {
-      throw new Error('GITHUB_TOKEN is required. Please set it in your .env file or environment variables.');
+      throw new Error('GITHUB_TOKEN is required. Please set it as an environment variable.');
     }
 
     if (!fs.existsSync(CONFIG.csvFile)) {
       throw new Error(`CSV file not found: ${CONFIG.csvFile}`);
     }
 
-    // Validate source repository exists
-    try {
-      await octokit.rest.repos.get({
-        owner: CONFIG.sourceOrg,
-        repo: CONFIG.sourceRepo
-      });
-      console.log('✅ Source repository validated');
-    } catch (error) {
-      throw new Error(`Source repository ${CONFIG.sourceOrg}/${CONFIG.sourceRepo} not found or not accessible`);
+    // Validate release tarball exists
+    if (!fs.existsSync(CONFIG.releaseTarball)) {
+      throw new Error(`Release tarball not found: ${CONFIG.releaseTarball}`);
     }
+    console.log('✅ Release tarball found');
 
     // Validate target organization exists
     try {
+      this.apiCallCount++;
       await octokit.rest.orgs.get({
         org: CONFIG.targetOrg
       });
       console.log('✅ Target organization validated');
+      
+      // Check initial rate limit
+      await this.checkRateLimit();
     } catch (error) {
       throw new Error(`Target organization ${CONFIG.targetOrg} not found or not accessible`);
     }
+  }
+
+  async extractRelease() {
+    console.log('📦 Extracting release tarball...');
+    
+    const extractDir = path.join(CONFIG.workingDir, 'extracted');
+    await fsPromises.mkdir(extractDir, { recursive: true });
+    
+    await tar.extract({
+      file: CONFIG.releaseTarball,
+      cwd: extractDir
+    });
+    
+    console.log('✅ Release extracted');
+    return extractDir;
+  }
+
+  async loadMetadata(extractDir) {
+    console.log('📖 Loading demo metadata...');
+    
+    const metadataPath = path.join(extractDir, '.octodemo', 'metadata.json');
+    if (!fs.existsSync(metadataPath)) {
+      throw new Error('metadata.json not found in release package');
+    }
+    
+    const metadata = JSON.parse(await fsPromises.readFile(metadataPath, 'utf-8'));
+    console.log(`✅ Loaded metadata for demo: ${metadata.name || 'unknown'}`);
+    
+    return metadata;
+  }
+
+  getRepositoriesFromMetadata(metadata) {
+    const repos = {};
+    
+    // Process both demo-contents and static-contents
+    const demoContents = metadata.demoContents || {};
+    const staticContents = metadata.staticContents || {};
+    
+    // Add demo-contents repositories
+    for (const [repoName, repoConfig] of Object.entries(demoContents)) {
+      repos[repoName] = {
+        mainBranch: repoConfig.mainBranch,
+        additionalBranches: repoConfig.additionalBranches || [],
+        contentType: 'demo-contents' // Track which type this came from
+      };
+    }
+    
+    // Add static-contents repositories
+    for (const [repoName, repoConfig] of Object.entries(staticContents)) {
+      repos[repoName] = {
+        mainBranch: repoConfig.mainBranch,
+        additionalBranches: repoConfig.additionalBranches || [],
+        contentType: 'static-contents' // Track which type this came from
+      };
+    }
+    
+    const demoCount = Object.keys(demoContents).length;
+    const staticCount = Object.keys(staticContents).length;
+    
+    console.log(`📋 Found ${Object.keys(repos).length} total repositories:`);
+    if (demoCount > 0) console.log(`   - ${demoCount} demo-contents repositories`);
+    if (staticCount > 0) console.log(`   - ${staticCount} static-contents repositories`);
+    
+    return repos;
   }
 
   async loadAttendees() {
@@ -92,6 +249,7 @@ class WorkshopRepoSetup {
 
   async checkRepoExists(repoName) {
     try {
+      this.apiCallCount++;
       await octokit.rest.repos.get({
         owner: CONFIG.targetOrg,
         repo: repoName
@@ -105,33 +263,130 @@ class WorkshopRepoSetup {
     }
   }
 
-  async createDuplicateRepository(newRepoName) {
-    console.log(`📦 Creating duplicate repository ${CONFIG.targetOrg}/${newRepoName}...`);
+  async createRepositoryFromRelease(newRepoName, sourceRepoName, repoConfig, extractDir) {
+    console.log(`  📦 Creating repository ${CONFIG.targetOrg}/${newRepoName}...`);
     
-    // Get source repository details
-    const sourceRepo = await octokit.rest.repos.get({
-      owner: CONFIG.sourceOrg,
-      repo: CONFIG.sourceRepo
-    });
-
     // Create new empty repository with internal visibility
+    this.apiCallCount++;
     const response = await octokit.rest.repos.createInOrg({
       org: CONFIG.targetOrg,
       name: newRepoName,
-      description: `Workshop copy of ${sourceRepo.data.description || CONFIG.sourceRepo}`,
-      visibility: 'internal', // Set to internal visibility
+      description: `Demo repository based on ${sourceRepoName}`,
+      visibility: 'internal',
       has_issues: true,
       has_projects: true,
       has_wiki: false,
-      auto_init: false // Important: don't initialize with README
+      auto_init: false
     });
 
-    console.log(`✅ Created empty repository: ${CONFIG.targetOrg}/${newRepoName}`);
+    console.log(`  ✅ Created empty repository: ${CONFIG.targetOrg}/${newRepoName}`);
     
-    // Clone and push repository content using git commands
-    await this.cloneRepositoryWithGit(newRepoName, response.data.clone_url);
+    // Populate repository with content from extracted release
+    await this.populateRepositoryFromExtract(
+      newRepoName, 
+      sourceRepoName,
+      repoConfig, 
+      extractDir, 
+      response.data.clone_url
+    );
     
     return response.data;
+  }
+
+  async populateRepositoryFromExtract(newRepoName, sourceRepoName, repoConfig, extractDir, targetCloneUrl) {
+    console.log(`  📂 Populating ${newRepoName} from extracted ${repoConfig.contentType}/${sourceRepoName}...`);
+    
+    // Use the contentType from repoConfig to find the correct source path
+    const sourcePath = path.join(extractDir, repoConfig.contentType, sourceRepoName);
+    
+    // Check if source path exists
+    try {
+      await fsPromises.access(sourcePath);
+    } catch (error) {
+      throw new Error(`Source path not found: ${sourcePath}`);
+    }
+    
+    const tempDir = `/tmp/workshop-populate-${Date.now()}`;
+    
+    try {
+      // Copy extracted content to temp directory
+      await fsPromises.mkdir(tempDir, { recursive: true });
+      await this.copyDirectory(sourcePath, tempDir);
+      
+      // Initialize git repository
+      process.chdir(tempDir);
+      await this.runGitCommand('git init');
+      await this.runGitCommand('git config user.email "workshop@example.com"');
+      await this.runGitCommand('git config user.name "Workshop Setup"');
+      
+      // Add all content and commit
+      await this.runGitCommand('git add -A');
+      await this.runGitCommand('git commit -m "Initial commit from release package"');
+      
+      // Get all branches from source
+      const branchDirs = await fsPromises.readdir(sourcePath);
+      
+      // Process each branch
+      for (const branch of branchDirs) {
+        const branchPath = path.join(sourcePath, branch);
+        const stat = await fsPromises.stat(branchPath);
+        
+        if (stat.isDirectory()) {
+          console.log(`  📋 Processing branch: ${branch}`);
+          
+          // Create and checkout branch
+          if (branch !== 'main') {
+            await this.runGitCommand(`git checkout -b ${branch}`);
+          }
+          
+          // Clear temp directory
+          await this.runGitCommand('git rm -rf .');
+          
+          // Copy branch content
+          await this.copyDirectory(branchPath, tempDir);
+          
+          // Commit branch content
+          await this.runGitCommand('git add -A');
+          await this.runGitCommand(`git commit -m "Content for ${branch} branch" --allow-empty`);
+        }
+      }
+      
+      // Push all branches
+      const targetUrlWithAuth = targetCloneUrl.replace('https://', `https://${CONFIG.githubToken}@`);
+      await this.runGitCommand(`git remote add origin ${targetUrlWithAuth}`);
+      await this.runGitCommand('git push -u origin --all');
+      
+      // Return to original directory
+      process.chdir(this.originalWorkingDir);
+      
+      console.log(`  ✅ Successfully populated repository from ${repoConfig.contentType}`);
+      
+    } catch (error) {
+      // Return to original directory on error
+      try {
+        process.chdir(this.originalWorkingDir);
+      } catch (chdirError) {
+        console.warn('Failed to change back to original directory');
+      }
+      
+      console.error(`  ❌ Failed to populate repository: ${error.message}`);
+      throw error;
+    } finally {
+      // Clean up temp directory
+      try {
+        await this.runGitCommand(`rm -rf ${tempDir}`);
+      } catch (cleanupError) {
+        console.warn(`  ⚠️ Failed to clean up temporary directory: ${tempDir}`);
+      }
+    }
+  }
+
+  async copyDirectory(source, destination) {
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
+    
+    await execAsync(`cp -R "${source}"/. "${destination}"`);
   }
 
   async cloneRepositoryWithGit(newRepoName, targetCloneUrl) {
@@ -240,83 +495,7 @@ class WorkshopRepoSetup {
     }
   }
 
-  async ensureRequiredBranchesExist(repoName) {
-    console.log(`🌿 Verifying required branches exist in ${repoName}...`);
-    
-    try {
-      // Get all branches from the target repository
-      const branches = await octokit.rest.repos.listBranches({
-        owner: CONFIG.targetOrg,
-        repo: repoName,
-        per_page: 100
-      });
-      
-      const existingBranches = branches.data.map(b => b.name);
-      const missingBranches = CONFIG.requiredBranches.filter(b => !existingBranches.includes(b));
-      
-      if (missingBranches.length === 0) {
-        console.log(`  ✅ All required branches exist: ${CONFIG.requiredBranches.join(', ')}`);
-        return;
-      }
-      
-      console.log(`  🔧 Creating missing branches: ${missingBranches.join(', ')}`);
-      
-      // Get main branch (or first available branch) to create missing branches from
-      const baseBranch = existingBranches.includes('main') 
-        ? branches.data.find(b => b.name === 'main')
-        : branches.data[0];
-      
-      if (!baseBranch) {
-        console.log(`  ⚠️ No base branch found to create missing branches from`);
-        return;
-      }
-      
-      // Create missing branches
-      for (const branch of missingBranches) {
-        try {
-          await octokit.rest.git.createRef({
-            owner: CONFIG.targetOrg,
-            repo: repoName,
-            ref: `refs/heads/${branch}`,
-            sha: baseBranch.commit.sha
-          });
-          console.log(`    ✅ Created branch: ${branch}`);
-        } catch (error) {
-          console.log(`    ⚠️ Failed to create branch ${branch}: ${error.message}`);
-        }
-      }
-      
-    } catch (error) {
-      console.error(`❌ Failed to verify branches: ${error.message}`);
-      // Don't throw here - this is not critical to the main functionality
-    }
-  }
 
-
-
-  async createOrUpdateRef(owner, repo, branch, sha) {
-    try {
-      // Try to create new reference
-      await octokit.rest.git.createRef({
-        owner: owner,
-        repo: repo,
-        ref: `refs/heads/${branch}`,
-        sha: sha
-      });
-    } catch (refError) {
-      // If reference already exists, update it
-      if (refError.status === 422 && refError.message.includes('already exists')) {
-        await octokit.rest.git.updateRef({
-          owner: owner,
-          repo: repo,
-          ref: `heads/${branch}`,
-          sha: sha
-        });
-      } else {
-        throw refError;
-      }
-    }
-  }
 
   async prebuildCodespaces(repoName) {
     console.log(`🚀 Setting up Codespaces prebuilds for ${repoName}...`);
@@ -422,77 +601,129 @@ class WorkshopRepoSetup {
 
 
   async addCollaborator(repoName, username) {
-    console.log(`👤 Adding ${username} as owner of ${repoName}...`);
+    console.log(`  👤 Adding ${username} as owner of ${repoName}...`);
     
     try {
+      this.apiCallCount++;
       await octokit.rest.repos.addCollaborator({
         owner: CONFIG.targetOrg,
         repo: repoName,
         username: username,
         permission: 'admin'
       });
-      console.log(`✅ Added ${username} as admin collaborator`);
+      console.log(`  ✅ Added ${username} as admin collaborator`);
     } catch (error) {
       if (error.status === 422) {
-        console.log(`ℹ️ ${username} is already a collaborator`);
+        console.log(`  ℹ️ ${username} is already a collaborator`);
       } else {
         throw error;
       }
     }
   }
 
-  async setupRepoForAttendee(attendee) {
-    const repoName = `${CONFIG.sourceRepo}-${attendee.githubUsername}`;
+  async setupReposForAttendee(attendee, repositories, extractDir) {
+    console.log(`\n🚀 Setting up repositories for ${attendee.githubUsername}...`);
     
-    console.log(`\n🚀 Setting up repository for ${attendee.githubUsername}...`);
+    const repoEntries = Object.entries(repositories);
+    const results = [];
     
-    try {
-      // Check if repo already exists
-      if (await this.checkRepoExists(repoName)) {
-        console.log(`⏭️ Repository ${repoName} already exists, skipping...`);
-        this.results.skipped.push({
-          attendee,
-          repoName,
-          reason: 'Repository already exists'
-        });
-        return;
+    // Process repos in batches with concurrency control
+    for (let i = 0; i < repoEntries.length; i += CONFIG.concurrentRepos) {
+      const batch = repoEntries.slice(i, i + CONFIG.concurrentRepos);
+      
+      const batchPromises = batch.map(async ([sourceRepoName, repoConfig]) => {
+        const newRepoName = `${sourceRepoName}-${attendee.githubUsername}`;
+        
+        try {
+          // Check rate limit before processing
+          await this.waitIfNeeded();
+          
+          // Check if repo already exists
+          this.apiCallCount++;
+          if (await this.checkRepoExists(newRepoName)) {
+            console.log(`  ⏭️ Repository ${newRepoName} already exists, skipping...`);
+            this.results.skipped.push({
+              attendee,
+              repoName: newRepoName,
+              sourceRepo: sourceRepoName,
+              reason: 'Repository already exists'
+            });
+            return { status: 'skipped', repoName: newRepoName };
+          }
+
+          // Create repository from release content (with retry)
+          await this.retryOperation(
+            () => this.createRepositoryFromRelease(newRepoName, sourceRepoName, repoConfig, extractDir),
+            `create repository ${newRepoName}`
+          );
+
+          // Add attendee as collaborator (with retry)
+          await this.retryOperation(
+            () => this.addCollaborator(newRepoName, attendee.githubUsername),
+            `add collaborator to ${newRepoName}`
+          );
+
+          // Prebuild Codespaces for the repository (best effort, don't fail if this fails)
+          try {
+            await this.prebuildCodespaces(newRepoName);
+          } catch (error) {
+            console.log(`  ℹ️  Codespaces setup skipped for ${newRepoName}: ${error.message}`);
+          }
+
+          console.log(`  ✅ Successfully set up repository: ${CONFIG.targetOrg}/${newRepoName}`);
+          this.results.success.push({
+            attendee,
+            repoName: newRepoName,
+            sourceRepo: sourceRepoName,
+            repoUrl: `https://github.com/${CONFIG.targetOrg}/${newRepoName}`
+          });
+          
+          return { status: 'success', repoName: newRepoName };
+
+        } catch (error) {
+          console.error(`  ❌ Failed to set up repository ${newRepoName}: ${error.message}`);
+          this.results.failed.push({
+            attendee,
+            repoName: newRepoName,
+            sourceRepo: sourceRepoName,
+            error: error.message
+          });
+          
+          return { status: 'failed', repoName: newRepoName, error: error.message };
+        }
+      });
+      
+      results.push(...await Promise.all(batchPromises));
+      
+      // Small delay between batches to avoid abuse detection
+      if (i + CONFIG.concurrentRepos < repoEntries.length) {
+        await this.sleep(500);
       }
-
-      // Create duplicate repository
-      await this.createDuplicateRepository(repoName);
-
-      // Ensure any missing required branches are created
-      await this.ensureRequiredBranchesExist(repoName);
-
-      // Add attendee as collaborator
-      await this.addCollaborator(repoName, attendee.githubUsername);
-
-      // Prebuild Codespaces for the repository
-      await this.prebuildCodespaces(repoName);
-
-      console.log(`✅ Successfully set up repository: ${CONFIG.targetOrg}/${repoName}`);
-      this.results.success.push({
-        attendee,
-        repoName,
-        repoUrl: `https://github.com/${CONFIG.targetOrg}/${repoName}`
-      });
-
-    } catch (error) {
-      console.error(`❌ Failed to set up repository for ${attendee.githubUsername}: ${error.message}`);
-      this.results.failed.push({
-        attendee,
-        repoName,
-        error: error.message
-      });
     }
+    
+    return results;
   }
 
   async run() {
-    console.log('🎯 Workshop Repository Setup Starting...\n');
+    console.log('🎯 Workshop Repository Setup Starting (from release.tar.gz)...\n');
     
     try {
       // Validate configuration
       await this.validateConfig();
+      
+      // Extract release tarball
+      const extractDir = await this.extractRelease();
+      
+      // Load metadata from release
+      const metadata = await this.loadMetadata(extractDir);
+      
+      // Get repositories from metadata
+      const repositories = this.getRepositoriesFromMetadata(metadata);
+      
+      if (Object.keys(repositories).length === 0) {
+        console.log('⚠️ No repositories found in release package');
+        return;
+      }
 
       // Load attendees
       const attendees = await this.loadAttendees();
@@ -502,24 +733,57 @@ class WorkshopRepoSetup {
         return;
       }
 
-      // Process each attendee
-      for (let i = 0; i < attendees.length; i++) {
-        const attendee = attendees[i];
-        console.log(`\n📊 Progress: ${i + 1}/${attendees.length}`);
+      // Process attendees in batches for better performance
+      console.log(`\n🚀 Processing ${attendees.length} attendees in batches of ${CONFIG.concurrentAttendees}...`);
+      const startTime = Date.now();
+      
+      for (let i = 0; i < attendees.length; i += CONFIG.concurrentAttendees) {
+        const batch = attendees.slice(i, i + CONFIG.concurrentAttendees);
+        const batchNum = Math.floor(i / CONFIG.concurrentAttendees) + 1;
+        const totalBatches = Math.ceil(attendees.length / CONFIG.concurrentAttendees);
         
-        await this.setupRepoForAttendee(attendee);
+        console.log(`\n📊 Batch ${batchNum}/${totalBatches} - Processing attendees ${i + 1}-${Math.min(i + CONFIG.concurrentAttendees, attendees.length)}/${attendees.length}`);
         
-        // Add a small delay to avoid rate limiting
-        if (i < attendees.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
+        // Check rate limit before each batch
+        await this.waitIfNeeded();
+        
+        // Process batch concurrently
+        const batchPromises = batch.map(attendee => 
+          this.setupReposForAttendee(attendee, repositories, extractDir)
+        );
+        
+        await Promise.all(batchPromises);
+        
+        // Calculate and display progress
+        const processedCount = Math.min(i + CONFIG.concurrentAttendees, attendees.length);
+        const percentComplete = Math.round((processedCount / attendees.length) * 100);
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        const avgTimePerAttendee = elapsed / processedCount;
+        const remaining = Math.round((attendees.length - processedCount) * avgTimePerAttendee);
+        
+        console.log(`\n⏱️  Progress: ${percentComplete}% complete | Elapsed: ${elapsed}s | Est. remaining: ${remaining}s`);
+        console.log(`   Success: ${this.results.success.length} | Skipped: ${this.results.skipped.length} | Failed: ${this.results.failed.length}`);
+        
+        // Delay between batches to avoid rate limiting
+        if (i + CONFIG.concurrentAttendees < attendees.length) {
+          console.log(`⏸️  Waiting ${CONFIG.delayBetweenBatches / 1000}s before next batch...`);
+          await this.sleep(CONFIG.delayBetweenBatches);
         }
       }
+      
+      const totalTime = Math.round((Date.now() - startTime) / 1000);
+      console.log(`\n✅ All attendees processed in ${totalTime}s (${Math.round(totalTime / 60)}m ${totalTime % 60}s)`);
 
       // Print summary
       this.printSummary();
+      
+      // Clean up extracted files
+      console.log('\n🧹 Cleaning up...');
+      await this.runGitCommand(`rm -rf ${CONFIG.workingDir}`);
 
     } catch (error) {
       console.error('💥 Setup failed:', error.message);
+      console.error(error.stack);
       process.exit(1);
     }
   }
@@ -536,7 +800,7 @@ class WorkshopRepoSetup {
     if (this.results.success.length > 0) {
       console.log('\n✅ Successfully Created Repositories:');
       this.results.success.forEach(result => {
-        console.log(`  • ${result.repoName} for ${result.attendee.githubUsername}`);
+        console.log(`  • ${result.repoName} (from ${result.sourceRepo}) for ${result.attendee.githubUsername}`);
         console.log(`    📎 ${result.repoUrl}`);
       });
     }

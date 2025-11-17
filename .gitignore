@@ -7,6 +7,9 @@ yarn-error.log*
 # Environment variables
 .env
 
+# Release files 
+release.tar.gz
+
 # Results files
 setup-results-*.json
 cleanup-results-*.json
