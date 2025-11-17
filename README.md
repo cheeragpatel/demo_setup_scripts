@@ -328,3 +328,13 @@ The main class `WorkshopRepoSetup` handles:
 - CSV parsing
 - Repository operations (fork, branch creation, collaborator management)
 - Error handling and reporting
+
+## Preparing release tarball
+
+To prepare a release tarball, grab the latest Octocat Supply release.tar.gz.  Then run this release preparation script:
+
+```bash
+node prepare-release.js
+```
+
+Afterwards, upload the generated `workshop-release.tar.gz` to the release assets of this repository for use by the setup script.
