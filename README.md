@@ -43,21 +43,34 @@ cp .env.example .env
 Edit `.env` file with your specific configuration:
 
 ```env
-# GitHub Personal Access Token
-GITHUB_TOKEN=ghp_your_token_here
+# GitHub Personal Access Token with repo, admin:org, and workflow permissions
+#   -- delete_repo scope is also needed if you plan to run the cleanup script
+GITHUB_TOKEN=your_github_token_here
 
-# Source repository to fork from
-SOURCE_ORG=my-company
-SOURCE_REPO=workshop-demo
+# Release Package Configuration
+RELEASE_TARBALL=./workshop-release.tar.gz
 
 # Target organization where new repos will be created
 TARGET_ORG=your-target-org
 
-# CSV file with attendee information
+# CSV file containing attendee information
 CSV_FILE=attendees.csv
 
-# Enable Codespaces prebuilds for faster startup (true/false)  
+# Working Directory (temporary files)
+WORKING_DIR=./temp-release-setup
+
+# Enable Codespaces prebuilds (true/false)
 ENABLE_CODESPACES_PREBUILDS=true
+
+# Performance & Rate Limiting Configuration
+# For 100-150 attendees, these settings are optimized
+CONCURRENT_ATTENDEES=5          # Process N attendees simultaneously
+CONCURRENT_REPOS=3              # Process N repos per attendee simultaneously
+DELAY_BETWEEN_BATCHES=2000      # Milliseconds delay between batches
+RATE_LIMIT_BUFFER=100           # Keep this many API calls in reserve
+RETRY_ATTEMPTS=3                # Number of retries for failed operations
+RETRY_DELAY=5000                # Milliseconds between retries
+
 ```
 
 ### 3. Prepare Attendee List

@@ -8,6 +8,7 @@ const fsPromises = require('fs').promises;
 const csv = require('csv-parser');
 const path = require('path');
 const tar = require('tar');
+const { Liquid } = require('liquidjs');
 
 // Configuration - Update these variables as needed
 const CONFIG = {
@@ -185,7 +186,141 @@ class WorkshopRepoSetup {
     const metadata = JSON.parse(await fsPromises.readFile(metadataPath, 'utf-8'));
     console.log(`✅ Loaded metadata for demo: ${metadata.name || 'unknown'}`);
     
+    // Store metadata for template context
+    this.metadata = metadata;
+    
     return metadata;
+  }
+
+  buildTemplateContext(newRepoName, sourceRepoName, repoConfig) {
+    // Build a template context similar to gh-octodemo's deployment context
+    const context = {
+      source: {
+        version: this.metadata?.version || '1.0.0',
+        url: this.metadata?.url || '',
+        github_instance_url: 'https://github.com'
+      },
+      demo_instance_name: newRepoName,
+      demo_slug: this.metadata?.shortname || sourceRepoName,
+      demo_org: {
+        owner: CONFIG.targetOrg,
+        github_instance_url: 'https://github.com'
+      },
+      repository_name: newRepoName,
+      source_repository: sourceRepoName
+    };
+    
+    return context;
+  }
+
+  async loadIssueBlueprints(extractDir, sourceRepoName) {
+    const issueContentPath = path.join(extractDir, '.octodemo', 'demo', 'issue-contents');
+    
+    // Check if issue content directory exists
+    try {
+      await fsPromises.access(issueContentPath);
+    } catch (error) {
+      console.log('  ℹ️  No issue blueprints found in release package');
+      return [];
+    }
+
+    const issues = [];
+    
+    // Determine backend type from metadata
+    const backend = this.metadata?.templateMainBranch || 'nodejs';
+    
+    try {
+      // Load the main issues (these are hardcoded in the blueprint)
+      const legalDownloadPath = path.join(issueContentPath, 'legal-download-issue.md');
+      const unittestPath = path.join(issueContentPath, `unittest-issue-${backend}.md`);
+      
+      let legalDownloadBody = '';
+      let unittestBody = '';
+      
+      try {
+        legalDownloadBody = await fsPromises.readFile(legalDownloadPath, 'utf-8');
+      } catch (error) {
+        console.log('  ⚠️  legal-download-issue.md not found');
+      }
+      
+      try {
+        unittestBody = await fsPromises.readFile(unittestPath, 'utf-8');
+      } catch (error) {
+        console.log(`  ⚠️  unittest-issue-${backend}.md not found`);
+      }
+
+      // Define the issues based on issue-blueprints.js structure
+      if (legalDownloadBody) {
+        issues.push({
+          title: 'Compliance Requirements',
+          body: `## Overview\n\nAs an e-commerce platform, we need to implement essential compliance features to operate legally and maintain customer trust. This epic encompasses all regulatory and legal requirements necessary for our web shop operations.\n\n## Key Requirements\n\n- **Terms and Conditions**: Implement downloadable terms of service\n- **Privacy Policy**: Create and maintain privacy documentation\n- **Data Protection**: Ensure GDPR/CCPA compliance\n- **Legal Documentation**: Provide accessible legal documents\n- **Cookie Policies**: Implement proper consent mechanisms\n\n## Business Impact\n\nWithout proper compliance measures, we cannot:\n- Legally operate as a web shop\n- Process customer data safely\n- Build customer trust and credibility\n- Avoid regulatory penalties\n\n## Acceptance Criteria\n\n- [ ] All legal documents are accessible to customers\n- [ ] Terms and conditions can be downloaded\n- [ ] Privacy policies are clearly stated\n- [ ] Compliance with relevant data protection laws\n- [ ] Legal team approval on all documentation`,
+          labels: []
+        });
+        
+        issues.push({
+          title: 'Allow downloading our terms and conditions',
+          body: legalDownloadBody,
+          labels: ['good first issue']
+        });
+        
+        issues.push({
+          title: 'Add terms acceptance to checkout process',
+          body: `## Overview\n\nImplement terms and conditions acceptance as a required step in the checkout process. Customers must acknowledge and accept our terms before completing their purchase.\n\n## Requirements\n\n- Add a checkbox during checkout requiring users to accept terms and conditions\n- Include a link to download the full terms and conditions document\n- Prevent order completion until terms are accepted\n- Store acceptance timestamp and IP address for legal compliance\n\n## Dependencies\n\nThis feature is **blocked by** the "Allow downloading our terms and conditions" issue, as users need to be able to access and review the terms via a downloadable link before they can properly accept them.\n\n## Acceptance Criteria\n\n- [ ] Checkbox appears on checkout page with clear terms acceptance text\n- [ ] Download link for terms and conditions is prominently displayed\n- [ ] Checkout cannot proceed without terms acceptance\n- [ ] Acceptance is logged with timestamp and user information\n- [ ] Link opens terms document in new tab/window for easy review`,
+          labels: []
+        });
+      }
+      
+      if (unittestBody) {
+        issues.push({
+          title: 'Improve test coverage for API',
+          body: unittestBody,
+          labels: ['testing']
+        });
+      }
+      
+    } catch (error) {
+      console.warn(`  ⚠️  Error loading issue blueprints: ${error.message}`);
+    }
+    
+    return issues;
+  }
+
+  async createIssues(repoName, issues) {
+    if (!issues || issues.length === 0) {
+      console.log('  ℹ️  No issues to create');
+      return;
+    }
+
+    console.log(`  📝 Creating ${issues.length} issue(s) in ${repoName}...`);
+    
+    for (const issue of issues) {
+      try {
+        this.apiCallCount++;
+        await this.waitIfNeeded();
+        
+        const issueData = {
+          owner: CONFIG.targetOrg,
+          repo: repoName,
+          title: issue.title,
+          body: issue.body
+        };
+        
+        // Add labels if specified
+        if (issue.labels && issue.labels.length > 0) {
+          issueData.labels = issue.labels;
+        }
+        
+        const response = await octokit.rest.issues.create(issueData);
+        
+        console.log(`    ✅ Created issue #${response.data.number}: ${issue.title}`);
+        
+        // Small delay between issue creations
+        await this.sleep(500);
+        
+      } catch (error) {
+        console.error(`    ❌ Failed to create issue "${issue.title}": ${error.message}`);
+      }
+    }
   }
 
   getRepositoriesFromMetadata(metadata) {
@@ -200,6 +335,7 @@ class WorkshopRepoSetup {
       repos[repoName] = {
         mainBranch: repoConfig.mainBranch,
         additionalBranches: repoConfig.additionalBranches || [],
+        templatedFiles: repoConfig.templatedFiles || [],
         contentType: 'demo-contents' // Track which type this came from
       };
     }
@@ -209,6 +345,7 @@ class WorkshopRepoSetup {
       repos[repoName] = {
         mainBranch: repoConfig.mainBranch,
         additionalBranches: repoConfig.additionalBranches || [],
+        templatedFiles: repoConfig.templatedFiles || [],
         contentType: 'static-contents' // Track which type this came from
       };
     }
@@ -268,16 +405,24 @@ class WorkshopRepoSetup {
     
     // Create new empty repository with internal visibility
     this.apiCallCount++;
-    const response = await octokit.rest.repos.createInOrg({
-      org: CONFIG.targetOrg,
-      name: newRepoName,
-      description: `Demo repository based on ${sourceRepoName}`,
-      visibility: 'internal',
-      has_issues: true,
-      has_projects: true,
-      has_wiki: false,
-      auto_init: false
-    });
+    let response;
+    try {
+      response = await octokit.rest.repos.createInOrg({
+        org: CONFIG.targetOrg,
+        name: newRepoName,
+        description: `Demo repository based on ${sourceRepoName}`,
+        visibility: 'internal',
+        has_issues: true,
+        has_projects: true,
+        has_wiki: false,
+        auto_init: false
+      });
+    } catch (error) {
+      if (error.status === 422 && error.message.includes('name already exists')) {
+        throw new Error(`Repository ${newRepoName} already exists (was not caught by pre-check)`);
+      }
+      throw new Error(`Repository creation failed.: ${error.message}`);
+    }
 
     console.log(`  ✅ Created empty repository: ${CONFIG.targetOrg}/${newRepoName}`);
     
@@ -309,45 +454,84 @@ class WorkshopRepoSetup {
     const tempDir = `/tmp/workshop-populate-${Date.now()}`;
     
     try {
-      // Copy extracted content to temp directory
+      // Initialize git repository first
       await fsPromises.mkdir(tempDir, { recursive: true });
-      await this.copyDirectory(sourcePath, tempDir);
-      
-      // Initialize git repository
       await this.runGitCommand('git init', tempDir);
       await this.runGitCommand('git config user.email "workshop@example.com"', tempDir);
       await this.runGitCommand('git config user.name "Workshop Setup"', tempDir);
       
-      // Add all content and commit
-      await this.runGitCommand('git add -A', tempDir);
-      await this.runGitCommand('git commit -m "Initial commit from release package"', tempDir);
-      
-      // Get all branches from source
+      // Get all branch directories from source
       const branchDirs = await fsPromises.readdir(sourcePath);
+      const branches = [];
       
-      // Process each branch
-      for (const branch of branchDirs) {
-        const branchPath = path.join(sourcePath, branch);
-        const stat = await fsPromises.stat(branchPath);
-        
+      // Collect all directories that represent branches
+      for (const item of branchDirs) {
+        const itemPath = path.join(sourcePath, item);
+        const stat = await fsPromises.stat(itemPath);
         if (stat.isDirectory()) {
-          console.log(`  📋 Processing branch: ${branch}`);
-          
-          // Create and checkout branch
-          if (branch !== 'main') {
-            await this.runGitCommand(`git checkout -b ${branch}`, tempDir);
-          }
-          
-          // Clear temp directory
-          await this.runGitCommand('git rm -rf .', tempDir);
-          
-          // Copy branch content
-          await this.copyDirectory(branchPath, tempDir);
-          
-          // Commit branch content
-          await this.runGitCommand('git add -A', tempDir);
-          await this.runGitCommand(`git commit -m "Content for ${branch} branch" --allow-empty`, tempDir);
+          branches.push(item);
         }
+      }
+      
+      if (branches.length === 0) {
+        throw new Error(`No branch directories found in ${sourcePath}`);
+      }
+      
+      console.log(`  📋 Found ${branches.length} branch(es): ${branches.join(', ')}`);
+      
+      // Determine main branch and process it first
+      let mainBranchDir = branches.find(b => b === sourceRepoName || b === 'main');
+      if (!mainBranchDir) {
+        // If no obvious main branch, use the first one
+        mainBranchDir = branches[0];
+      }
+      
+      // Process main branch first
+      console.log(`  📋 Processing main branch from directory: ${mainBranchDir}`);
+      const mainBranchPath = path.join(sourcePath, mainBranchDir);
+      await this.copyDirectory(mainBranchPath, tempDir);
+      
+      // Render templates for main branch
+      if (repoConfig.templatedFiles && repoConfig.templatedFiles.length > 0) {
+        const templateContext = this.buildTemplateContext(newRepoName, sourceRepoName, repoConfig);
+        await this.renderTemplates(repoConfig.templatedFiles, tempDir, templateContext);
+      }
+      
+      await this.runGitCommand('git add -A', tempDir);
+      await this.runGitCommand('git commit -m "Initial commit from release package" --allow-empty', tempDir);
+      
+      // Process additional branches
+      for (const branchDir of branches) {
+        if (branchDir === mainBranchDir) continue; // Skip main branch
+        
+        // Determine the branch name - strip the main branch prefix if present
+        let branchName = branchDir;
+        if (branchDir.startsWith(mainBranchDir + '-')) {
+          // e.g., "nodejs-feature-add-cart-page" -> "feature-add-cart-page"
+          branchName = branchDir.substring(mainBranchDir.length + 1);
+        }
+        
+        console.log(`  📋 Processing branch: ${branchName} (from directory: ${branchDir})`);
+        const branchPath = path.join(sourcePath, branchDir);
+        
+        // Create and checkout new branch
+        await this.runGitCommand(`git checkout -b ${branchName}`, tempDir);
+        
+        // Clear directory (keep .git)
+        await this.runGitCommand('git rm -rf .', tempDir);
+        
+        // Copy branch content
+        await this.copyDirectory(branchPath, tempDir);
+        
+        // Render templates for this branch
+        if (repoConfig.templatedFiles && repoConfig.templatedFiles.length > 0) {
+          const templateContext = this.buildTemplateContext(newRepoName, sourceRepoName, repoConfig);
+          await this.renderTemplates(repoConfig.templatedFiles, tempDir, templateContext);
+        }
+        
+        // Commit branch content
+        await this.runGitCommand('git add -A', tempDir);
+        await this.runGitCommand(`git commit -m "Content for ${branchName} branch" --allow-empty`, tempDir);
       }
       
       // Push all branches
@@ -372,6 +556,50 @@ class WorkshopRepoSetup {
     const execAsync = promisify(exec);
     
     await execAsync(`cp -R "${source}"/. "${destination}"`);
+  }
+
+  async renderTemplates(templatedFiles, workingDir, context) {
+    if (!templatedFiles || templatedFiles.length === 0) {
+      return;
+    }
+
+    console.log(`  🎨 Rendering ${templatedFiles.length} template file(s)...`);
+    
+    // Initialize Liquid template engine with custom delimiters matching gh-octodemo
+    const engine = new Liquid({
+      tagDelimiterLeft: '<%',
+      tagDelimiterRight: '%>',
+      outputDelimiterLeft: '<$',
+      outputDelimiterRight: '$>',
+      greedy: false // Preserve whitespace
+    });
+
+    for (const templateFile of templatedFiles) {
+      const filePath = path.join(workingDir, templateFile);
+      
+      try {
+        // Check if file exists
+        await fsPromises.access(filePath);
+        
+        // Read template file
+        const templateContent = await fsPromises.readFile(filePath, 'utf-8');
+        
+        // Render template with context
+        const rendered = await engine.parseAndRender(templateContent, context);
+        
+        // Write rendered content back to file
+        await fsPromises.writeFile(filePath, rendered, 'utf-8');
+        
+        console.log(`    ✅ Rendered: ${templateFile}`);
+      } catch (error) {
+        if (error.code === 'ENOENT') {
+          console.log(`    ⚠️  Template file not found (skipping): ${templateFile}`);
+        } else {
+          console.error(`    ❌ Failed to render ${templateFile}: ${error.message}`);
+          throw error;
+        }
+      }
+    }
   }
 
   async cloneRepositoryWithGit(newRepoName, targetCloneUrl) {
@@ -644,6 +872,16 @@ class WorkshopRepoSetup {
             () => this.addCollaborator(newRepoName, attendee.githubUsername),
             `add collaborator to ${newRepoName}`
           );
+
+          // Create issues from blueprints (only for demo-contents repos)
+          if (repoConfig.contentType === 'demo-contents') {
+            try {
+              const issues = await this.loadIssueBlueprints(extractDir, sourceRepoName);
+              await this.createIssues(newRepoName, issues);
+            } catch (error) {
+              console.log(`  ℹ️  Issue creation skipped for ${newRepoName}: ${error.message}`);
+            }
+          }
 
           // Prebuild Codespaces for the repository (best effort, don't fail if this fails)
           try {

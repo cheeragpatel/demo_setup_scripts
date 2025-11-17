@@ -8,7 +8,10 @@ yarn-error.log*
 .env
 
 # Release files 
-release.tar.gz
+*.tar.gz
+
+# Temp folders
+temp*/
 
 # Results files
 setup-results-*.json

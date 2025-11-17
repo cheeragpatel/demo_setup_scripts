@@ -8,11 +8,13 @@ require('dotenv').config();
 
 // Configuration - Update these variables as needed
 const CONFIG = {
-  sourceOrg: process.env.SOURCE_ORG || 'your-source-org',
-  sourceRepo: process.env.SOURCE_REPO || 'demo-repo',
   targetOrg: process.env.TARGET_ORG || 'your-target-org',
   csvFile: process.env.CSV_FILE || 'attendees.csv',
   githubToken: process.env.GITHUB_TOKEN,
+  
+  // Performance & Rate Limiting
+  concurrentDeletions: parseInt(process.env.CONCURRENT_DELETIONS || '5'), // Delete N repos at once
+  delayBetweenBatches: parseInt(process.env.DELAY_BETWEEN_BATCHES || '1000'), // ms delay between batches
 };
 
 // Initialize Octokit
@@ -27,6 +29,13 @@ class WorkshopRepoCleanup {
       notFound: [],
       failed: []
     };
+    
+    // Rate limit tracking
+    this.apiCallCount = 0;
+  }
+  
+  sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   async validateConfig() {
@@ -80,27 +89,32 @@ class WorkshopRepoCleanup {
     
     const existingRepos = [];
     
-    for (const attendee of attendees) {
-      const repoName = `${CONFIG.sourceRepo}-${attendee.githubUsername}`;
+    // Get all repos in the organization
+    try {
+      const { data: allRepos } = await octokit.rest.repos.listForOrg({
+        org: CONFIG.targetOrg,
+        type: 'all',
+        per_page: 100
+      });
       
-      try {
-        const repo = await octokit.rest.repos.get({
-          owner: CONFIG.targetOrg,
-          repo: repoName
-        });
+      // For each attendee, find repos that end with their username
+      for (const attendee of attendees) {
+        const suffix = `-${attendee.githubUsername}`;
+        const attendeeRepos = allRepos.filter(repo => repo.name.endsWith(suffix));
         
-        existingRepos.push({
-          attendee,
-          repoName,
-          repoUrl: repo.data.html_url,
-          createdAt: repo.data.created_at,
-          updatedAt: repo.data.updated_at
-        });
-      } catch (error) {
-        if (error.status !== 404) {
-          console.warn(`⚠️ Error checking ${repoName}: ${error.message}`);
+        for (const repo of attendeeRepos) {
+          existingRepos.push({
+            attendee,
+            repoName: repo.name,
+            repoUrl: repo.html_url,
+            createdAt: repo.created_at,
+            updatedAt: repo.updated_at
+          });
         }
       }
+    } catch (error) {
+      console.error(`❌ Error listing repositories: ${error.message}`);
+      throw error;
     }
     
     console.log(`✅ Found ${existingRepos.length} existing repositories to potentially delete`);
@@ -145,23 +159,24 @@ class WorkshopRepoCleanup {
   async deleteRepository(repoInfo) {
     const { repoName, attendee } = repoInfo;
     
-    console.log(`🗑️ Deleting repository: ${CONFIG.targetOrg}/${repoName}...`);
+    console.log(`  🗑️ Deleting: ${repoName}...`);
     
     try {
+      this.apiCallCount++;
       await octokit.rest.repos.delete({
         owner: CONFIG.targetOrg,
         repo: repoName
       });
       
-      console.log(`✅ Successfully deleted: ${CONFIG.targetOrg}/${repoName}`);
+      console.log(`  ✅ Deleted: ${repoName}`);
       this.results.deleted.push(repoInfo);
       
     } catch (error) {
       if (error.status === 404) {
-        console.log(`ℹ️ Repository ${repoName} not found (may have been already deleted)`);
+        console.log(`  ℹ️  Not found: ${repoName}`);
         this.results.notFound.push(repoInfo);
       } else {
-        console.error(`❌ Failed to delete ${repoName}: ${error.message}`);
+        console.error(`  ❌ Failed: ${repoName} - ${error.message}`);
         this.results.failed.push({
           ...repoInfo,
           error: error.message
@@ -198,18 +213,39 @@ class WorkshopRepoCleanup {
 
       console.log('\n🚀 Starting repository deletion...\n');
 
-      // Delete each repository
-      for (let i = 0; i < existingRepos.length; i++) {
-        const repo = existingRepos[i];
-        console.log(`📊 Progress: ${i + 1}/${existingRepos.length}`);
+      // Delete repositories in batches with concurrency control
+      const startTime = Date.now();
+      
+      for (let i = 0; i < existingRepos.length; i += CONFIG.concurrentDeletions) {
+        const batch = existingRepos.slice(i, i + CONFIG.concurrentDeletions);
+        const batchNum = Math.floor(i / CONFIG.concurrentDeletions) + 1;
+        const totalBatches = Math.ceil(existingRepos.length / CONFIG.concurrentDeletions);
         
-        await this.deleteRepository(repo);
+        console.log(`\n📊 Batch ${batchNum}/${totalBatches} - Deleting repositories ${i + 1}-${Math.min(i + CONFIG.concurrentDeletions, existingRepos.length)}/${existingRepos.length}`);
         
-        // Add a small delay to avoid rate limiting
-        if (i < existingRepos.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
+        // Delete batch concurrently
+        const batchPromises = batch.map(repo => this.deleteRepository(repo));
+        await Promise.all(batchPromises);
+        
+        // Calculate and display progress
+        const processedCount = Math.min(i + CONFIG.concurrentDeletions, existingRepos.length);
+        const percentComplete = Math.round((processedCount / existingRepos.length) * 100);
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        const avgTimePerRepo = elapsed / processedCount;
+        const remaining = Math.round((existingRepos.length - processedCount) * avgTimePerRepo);
+        
+        console.log(`\n⏱️  Progress: ${percentComplete}% complete | Elapsed: ${elapsed}s | Est. remaining: ${remaining}s`);
+        console.log(`   Deleted: ${this.results.deleted.length} | Not Found: ${this.results.notFound.length} | Failed: ${this.results.failed.length}`);
+        
+        // Delay between batches to avoid rate limiting
+        if (i + CONFIG.concurrentDeletions < existingRepos.length) {
+          console.log(`⏸️  Waiting ${CONFIG.delayBetweenBatches / 1000}s before next batch...`);
+          await this.sleep(CONFIG.delayBetweenBatches);
         }
       }
+      
+      const totalTime = Math.round((Date.now() - startTime) / 1000);
+      console.log(`\n✅ All repositories processed in ${totalTime}s (${Math.round(totalTime / 60)}m ${totalTime % 60}s)`);
 
       // Print summary
       this.printSummary();
