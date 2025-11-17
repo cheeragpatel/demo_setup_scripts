@@ -17,10 +17,12 @@ This script automatically creates demo repositories for workshop attendees by fo
 
 ## Prerequisites
 
-1. **Node.js** (version 16 or higher)
+1. **Node.js** (tested on node 24.  Others may work)
 2. **GitHub Personal Access Token** with the following permissions:
    - `repo` (Full control of private repositories)
    - `admin:org` (Full control of orgs and teams, read and write org projects)
+   - `workflow` (Update GitHub Action workflows)
+   - `delete_repo` (Only needed if you plan to run the cleanup script.  It's 3 repos per attendee so likely the easiest way to clean up.)
 3. **Admin access** to the target organization where repositories will be created
 4. **Access** to the source repository that will be forked
 
@@ -92,16 +94,11 @@ bobwilson,bob.wilson@example.com
 
 **Required columns:**
 - `github_username`: The GitHub username of the attendee
-- `email`: (Optional) Email address for reference
+- `email`: (Optional) Email address for reference -- This is for your records only; the script does not use it.
 
-### 4. Verify Source Repository
+### 4. Verify Workshop Release Tarball
 
-Ensure your source repository exists and has the required branches:
-- `main` (default branch)
-- `feature-add-tos-download`
-- `feature-add-cart-page`
-
-If the feature branches don't exist in the source repository, the script will create them from the main branch.
+Grab the workshop-release.tar.gz file from the demo_setup_scripts repository release assets and place it in the root of this repository.
 
 ## Running the Script
 
