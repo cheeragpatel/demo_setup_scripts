@@ -17,10 +17,12 @@ This script automatically creates demo repositories for workshop attendees by fo
 
 ## Prerequisites
 
-1. **Node.js** (version 16 or higher)
+1. **Node.js** (tested on node 24.  Others may work)
 2. **GitHub Personal Access Token** with the following permissions:
    - `repo` (Full control of private repositories)
    - `admin:org` (Full control of orgs and teams, read and write org projects)
+   - `workflow` (Update GitHub Action workflows)
+   - `delete_repo` (Only needed if you plan to run the cleanup script.  It's 3 repos per attendee so likely the easiest way to clean up.)
 3. **Admin access** to the target organization where repositories will be created
 4. **Access** to the source repository that will be forked
 
@@ -43,21 +45,34 @@ cp .env.example .env
 Edit `.env` file with your specific configuration:
 
 ```env
-# GitHub Personal Access Token
-GITHUB_TOKEN=ghp_your_token_here
+# GitHub Personal Access Token with repo, admin:org, and workflow permissions
+#   -- delete_repo scope is also needed if you plan to run the cleanup script
+GITHUB_TOKEN=your_github_token_here
 
-# Source repository to fork from
-SOURCE_ORG=my-company
-SOURCE_REPO=workshop-demo
+# Release Package Configuration
+RELEASE_TARBALL=./workshop-release.tar.gz
 
 # Target organization where new repos will be created
 TARGET_ORG=your-target-org
 
-# CSV file with attendee information
+# CSV file containing attendee information
 CSV_FILE=attendees.csv
 
-# Enable Codespaces prebuilds for faster startup (true/false)  
+# Working Directory (temporary files)
+WORKING_DIR=./temp-release-setup
+
+# Enable Codespaces prebuilds (true/false)
 ENABLE_CODESPACES_PREBUILDS=true
+
+# Performance & Rate Limiting Configuration
+# For 100-150 attendees, these settings are optimized
+CONCURRENT_ATTENDEES=5          # Process N attendees simultaneously
+CONCURRENT_REPOS=3              # Process N repos per attendee simultaneously
+DELAY_BETWEEN_BATCHES=2000      # Milliseconds delay between batches
+RATE_LIMIT_BUFFER=100           # Keep this many API calls in reserve
+RETRY_ATTEMPTS=3                # Number of retries for failed operations
+RETRY_DELAY=5000                # Milliseconds between retries
+
 ```
 
 ### 3. Prepare Attendee List
@@ -79,22 +94,19 @@ bobwilson,bob.wilson@example.com
 
 **Required columns:**
 - `github_username`: The GitHub username of the attendee
-- `email`: (Optional) Email address for reference
+- `email`: (Optional) Email address for reference -- This is for your records only; the script does not use it.
 
-### 4. Verify Source Repository
+### 4. Verify Workshop Release Tarball
 
-Ensure your source repository exists and has the required branches:
-- `main` (default branch)
-- `feature-add-tos-download`
-- `feature-add-cart-page`
-
-If the feature branches don't exist in the source repository, the script will create them from the main branch.
+Grab the workshop-release.tar.gz file from the demo_setup_scripts repository release assets and place it in the root of this repository.
 
 ## Running the Script
 
 ### Repository Setup
 
 Create repositories for all attendees:
+
+> A note on rate limiting.  The deploy script is estimated at 21 API calls per attendee.  For 100 users that is 2100 API calls.  Still well within a PAT limit of 5000 per hour, but be aware if you are provisioning many users.  A GitHub app is a valid alternative if you need higher limits.
 
 ```bash
 npm start
@@ -105,6 +117,8 @@ Or directly with Node.js:
 ```bash
 node setup-repos.js
 ```
+
+> At a scale of 100-150 attendees, the script is optimized to run in about 15-20 minutes by processing multiple attendees and repositories concurrently while respecting GitHub's rate limits.
 
 ### Repository Cleanup
 
@@ -318,3 +332,13 @@ The main class `WorkshopRepoSetup` handles:
 - CSV parsing
 - Repository operations (fork, branch creation, collaborator management)
 - Error handling and reporting
+
+## Preparing release tarball
+
+To prepare a release tarball, grab the latest Octocat Supply release.tar.gz.  Then run this release preparation script:
+
+```bash
+node prepare-release.js
+```
+
+Afterwards, upload the generated `workshop-release.tar.gz` to the release assets of this repository for use by the setup script.

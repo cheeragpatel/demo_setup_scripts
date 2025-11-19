@@ -7,12 +7,19 @@ yarn-error.log*
 # Environment variables
 .env
 
+# Release files 
+*.tar.gz
+
+# Temp folders
+temp*/
+
 # Results files
 setup-results-*.json
 cleanup-results-*.json
 
 # Actual attendee data
 attendees.csv
+attendees*.csv
 
 # OS generated files
 .DS_Store
