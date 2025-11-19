@@ -55,8 +55,9 @@ By the end of this workshop, you'll have hands-on experience with:
 
 ### Quick Start
 
-1. **Launch Codespace (preferred)** or **Fork or clone the demo repository**
+1. **Launch Codespace (preferred)** or **clone your copy of the octocatSupply demo repository**
    ```bash
+   # In codespaces you do not need to clone or change directory
    git clone <repo-url> demo_copilot_agent
    cd demo_copilot_agent
    npm install
@@ -74,18 +75,7 @@ By the end of this workshop, you'll have hands-on experience with:
 
 4. **If using Codespaces:** Make ports 3000 and 5137 **Public**
    - Click on the `Ports` tab in the bottom panel, right click on a port and select `Port Visibility → Public`
-
-5. Switch to VS Code Insiders for planning mode
-   - If it is past November 2025, skip this!  But before then we need to use Insiders for Planning mode.
-   - To switch to Insiders in Codespaces:
-     - Click the gear icon in the lower left
-     - Click 'Switch to Insiders Version'
-     - This will restart the Codespace
-   - The Copilot extensions also need to use the pre-release version to be aligned with the IDE
-     - Go to the extensions panel on the left (the square / boxes icon)
-     - Search for 'GitHub Copilot' 
-     - Select the `GitHub Copilot Chat` extension.  If it has the option to `Switch to Pre-release`, click that.
-     - If it has no errors it should likely just work.  If you see an error, you may need to uninstall and reinstall the extension to get the pre-release version.
+   - Note port 3000 is the API, port 5137 is the frontend
 
 ---
 
@@ -97,21 +87,16 @@ By the end of this workshop, you'll have hands-on experience with:
 
 ### Step 1: Understand Requirements with Planning Mode
 
-A new **Planning mode** was shipped to VS Code Insiders.  This helps build a plan and clarify requirements.  This will come to Stable in November 2025.  Ideally use VS Code Insiders for this use case, but we also have included instructions for a custom agent for Stable users.
+A new **Planning mode** was shipped to VS Code in version 1.106 and helps build a plan and clarify requirements without implementing code.  This should also now be available in all other supported IDEs.
 
 1. Open Copilot Chat, switch to `Plan` mode
-   - If you don't have Planning mode (because you are on Stable or an old insiders version), create a custom agent with these instructions:
-     1. Go to the [awesome-copilot repo](https://github.com/github/awesome-copilot/blob/main/chatmodes/plan.chatmode.md) and copy the Plan chat mode.
-     2. Save this file as `.github/chatmodes/plan.chatmode.md`
-     3. Go to Copilot Chat, click the mode selector, and you should now have the custom `Plan` mode available.
-     4. Note this experience won't have the full Planning mode capabilities, but it will allow you to create a plan based on the design image.
-2. Drag `docs/design/cart.png` into chat (feel free to open it to review first)
-3. Set your model to 'Gemini 2.5 Pro'
+2. Set your model to 'Gemini 3 Pro' if available.  If not, use 'Gemini 2.5 Pro'
+3. Drag `docs/design/cart.png` into chat (feel free to open it to review first)
 4. Prompt:
    ```text
    I need to implement a shopping cart feature in this application matching this image including routing, navbar badge with item count, state management, and add/remove interactions.
    ```
-5. Copilot will ask clarifying questions like:
+5. Copilot will analyze, research, think, and ask clarifying questions like:
    - Should the cart persist across sessions?
    - What data should be stored?
    - Any constraints on UI/UX?
@@ -121,7 +106,7 @@ A new **Planning mode** was shipped to VS Code Insiders.  This helps build a pla
 ### Step 2: Implement with Agent Mode
 
 1. Switch to `Agent` mode, select `Claude Sonnet 4.5` model
-2. Prompt:
+2. Click the `Start Implementation` button or prompt:
    ```text
    Implement the plan you just produced.
    ```
@@ -141,6 +126,8 @@ You can follow along as files are created/modified and also in the task list.  I
    npm run dev
    ```
 2. Test in browser - Click on 'Ports' tab to open port 5137:
+   - Click `Continue` if you get a warning about accessing a Codespace
+   - You should see a cart icon in the nav bar at upper right
    - Go to the 'Products' page or click 'Explore Products'
    - Increment a quantity of a product and add to cart
    - Verify badge updates (shows a count next to the cart icon)
@@ -149,11 +136,11 @@ You can follow along as files are created/modified and also in the task list.  I
    ```text
    The badge doesn't update when I add items. Fix this.
    ```
-4. When you are all done, click 'Keep' to save the changes.  
+4. When you are all done, got back to the Copilot Chat window and click 'Keep' to save the changes.  
 
 ### What You Learned
 
-✅ **Planning Mode** or **Custom Plan Mode** - Clarify ambiguous requirements  
+✅ **Planning Mode** - Build a plan and clarify ambiguous requirements  
 ✅ **Vision** - Copilot understands UI designs  
 ✅ **Agent Mode** - Multi-file implementation with iteration  
 ✅ **Self-correction** - Agent can fix its own mistakes
@@ -171,9 +158,9 @@ You can follow along as files are created/modified and also in the task list.  I
 
 ### Step 1: Use a Reusable Prompt File
 
-Manually prompting for test coverage improvements can work.  However, it also means that the process many be inconsistent from developers and you never learn from mistakes. Instead, (have Copilot) create a documented prompt file checked into your repository.  Utilize this and enhance it over time based on responses where Copilot struggled.  Here we have provided a starting point (well, Copilot has)!
+Manually prompting for test coverage improvements can work.  However, it also means that the process many be inconsistent between developers and it is difficult to immplement improvements. Instead, (have Copilot) create a documented prompt file checked into your repository.  Utilize this and enhance it over time based on responses where Copilot struggled.  Here we have provided a starting point (well, Copilot has)!
 
-1. If you haven't already, click the `+` button in the Copilot Chat panel to clear your history.  This is a best practice when switching between use cases or activities to avoid sending unrelated context.
+1. If you haven't already, click the `+` button in the Copilot Chat panel to clear your history.  This is a best practice when switching between use cases or activities to avoid sending unnecessary context.
 2. Review `.github/prompts/demo-unit-test-coverage.prompt.md`
 3. Notice it defines:
    - Objective and routes to focus on
@@ -184,12 +171,14 @@ Manually prompting for test coverage improvements can work.  However, it also me
 
 ### Step 2: Execute the Prompt
 
-1. Switch to `Agent` mode, select the `Claude Sonnet 4` or `Claude Sonnet 4.5` models
+1. Switch to `Agent` mode, select the `Claude Sonnet 4.5` or `Claude Sonnet 4` models.  Newer is typically better...
 2. Run the prompt:
    - **Option A:** Click the play button when the prompt file is open
    - **Option B:** Type `/demo-unit-test-coverage` in chat.  The prompt name automatically becomes a slash command.
 
 ### Step 3: Agent Self-Heals Failures
+
+Note that any terminal command requires you to click `Allow` to let Copilot execute it.  This is a security feature to prevent unauthorized code execution.  However, you can also allow list certain commands that you know are not destructive.  
 
 Agent will:
 - Analyze current coverage
@@ -202,17 +191,20 @@ Agent will:
 
 ### Step 4: Verify Results Yourself
 
+This specific prompt focuses on `product` and `supplier` routes.  However, Copilot could also be prompted to cover all routes if desired.  You can verify coverage as follows:
+
 ```bash
 npm run test:coverage --workspace=api
 ```
 
 Review the coverage report - it should be significantly improved. 
 
+Click `Keep` to save these new tests to your codebase.
+
 ### What You Learned
 
-✅ **Prompt Files** - Reusable, documented workflows
+✅ **Prompt Files** - Reusable, documented workflows that can be improved over time
 ✅ **Iteration** - Agent iterates to fix failing tests automatically  
-✅ **CodeQL Integration** - Agent runs security scans after changes
 
 **Time Investment:** 20 minutes  
 **Value:** Comprehensive test suite that would take days to write manually
@@ -221,7 +213,7 @@ Review the coverage report - it should be significantly improved.
 
 ## Use Case 3: "We have standards and Copilot needs to understand and follow them"
 
-**Scenario:** Your uses an internal observability framework (TAO). New developers keep forgetting to add proper logging/metrics.  Beyond that, they continue to miss compliance requirements which delay releases.
+**Scenario:** Your company uses an internal observability framework (TAO). New developers keep forgetting to add proper logging/metrics.  Beyond that, they continue to miss compliance requirements which delay releases.
 
 **Your Challenge:** Encode team standards so Copilot enforces them automatically.
 
@@ -229,17 +221,18 @@ One of the most powerful features of Copilot is **Custom Instructions**.  These 
 
 ### Step 1: Review Current Standards
 
-1. Open `.github/copilot/copilot-instructions.md`
+1. Open `.github/copilot-instructions.md`
 2. See existing standards for the project.  Note you can reference other files, links, etc.
    - Formatting is just markdown.  Be concise as this takes up context space.  
    - You can reference other files or links for more detail.  
    - For your projects, the more documentation you have in repo the better, as Copilot agent mode can reference it directly.
+3. Note instructions can be path-specific to minimize context usage.  Look in `.github/instructions` for examples of path-specific instructions.
 
 **Important:** Don't have a `copilot-instructions.md` file yet?  Click the gear icon at the top of the Copilot Chat panel, then **"Generate Chat Instructions"** to generate a starter file from your workspace.  Alternatively, check out [awesome-copilot instructions](https://github.com/github/awesome-copilot/tree/main/instructions) for inspiration. 
 
 ### Step 2: Add Custom Instructions
 
-Add this section to `copilot-instructions.md`:
+Add this section to `.github/copilot-instructions.md` before the bottom `---` line:
 
 ```markdown
 ## REST API Guidelines
@@ -263,19 +256,20 @@ TAO is a fictitious observability framework for this workshop.  You can read abo
    Add observability to the Supplier route using our internal standards
    ```
 3. Notice Copilot:
-   - Adds TAO logging
+   - Adds TAO logging to `supplier.ts`
    - Includes metrics
    - Adds tracing
    - **Doesn't try to install TAO** (respects your instruction)
 
 4. Click 'Undo' to revert all changes.  We don't want to keep these changes as TAO is fictitious and it will break our app! 
 
+5. Update `.github/copilot-instructions.md` to remove the TAO content you added so it doesn't impact other usage.
 
 ### Step 4: Create a Handoff
 
 Sometimes you need to pass context to a teammate, a new chat session, or an agent.  Custom prompts can help with this.  Lets create a plan and then use a **handoff** to generate a summary document.
 
-1. Clear chat, switch to `Plan` mode.  Again, consider switching to `Gemini 2.5 Pro` for planning use cases.
+1. Clear chat, switch to `Plan` mode.  Again, consider switching to the latest Gemini model for planning use cases.
 2. Prompt:
    ```text
    Create a plan for a user profile page with edit capability and picture upload
@@ -300,7 +294,15 @@ Copilot instructions is great for driving behavior in your current repo/workspac
 
 Here we will use GitHub's remote Model Context Protocol (MCP) server to retrieve documentation from a shared Copilot Space and use that to check compliance.
 
-1. Start the GitHub Remote Copilot Space 
+1. Create a Copilot Space for your Compliance Documentation
+   - For this workshop you have your own documentation repo.  It is in the same organization and is called `compliance-<username>`
+   - Navigate to Copilot Spaces at https://github.com/copilot/spaces.  Here you can see existing spaces or create new ones.
+   - Click on `Create Space`
+   - Name your space `<username> OctoCAT Supply Compliance Docs` and replace `<username>` with your GitHub username.  Set the `Owner` to be the organization where your repos are hosted. 
+   - Click `Create Space` to complete this.  
+   - Now click `Add Sources` to add documentation to the space.  
+   - For simplicity of this lab, click `Add Repository` and select the `<organization>/compliance-<username>` repository.  This will add all markdown files in that repo to the space.  (In a real work scenario you will want to select specific files or directories)
+2. Back in your IDE start the GitHub Remote Copilot Space 
    - Open the Command Palette (Cmd/Ctrl + Shift + P)
      - Alternatively you can navigate to `.vscode/mcp.json` and click the start button next to the `github-remote` server definition.
    - Select "MCP: List Servers"
@@ -309,15 +311,17 @@ Here we will use GitHub's remote Model Context Protocol (MCP) server to retrieve
    - This will say "The MCP Server Definition 'github-remote' wants to authenticate to GitHub." Click "Allow" to continue
    - You will be redirected to an OAUTH flow.  Click 'Continue' on the account you are using.  
    - If the organization for your repo requires SSO, you may need to authenticate that as well.  If not you can just click 'Continue' again.
-2. Check out the `feature-add-tos-download` branch.
-   `git checkout feature-add-tos-download` (you may need to `git stash` first)
-3. Clear your chat history in Copilot Chat and switch to `Agent` mode, using the `Claude Sonnet 4.5` model.
-4. Click on the 'Tools' icon next to the model selector.  You should see `github-remote` checked at the bottom.  You can uncheck things like `Azure MCP Server`, `Bicep`, and `playwright` if they are selected.  Click `OK` to save. 
-5. Enter the following prompt:
+3. Check out the `feature-add-tos-download` branch.
+   `git checkout feature-add-tos-download` (you likely need to `git stash` first)
+4. Clear your chat history in Copilot Chat and switch to `Agent` mode, using the `Claude Sonnet 4.5` model.
+5. Click on the 'Tools' icon next to the model selector.  You should see `github-remote` checked at the bottom.  You can uncheck things like `Azure MCP Server`, `Bicep`, and `playwright` if they are selected.  Click `OK` to save. 
+6. Enter the following prompt replacing `username` with your GitHub username:
 
     ```txt
-    Get the contents of the Copilot Space `OD OctoCAT Supply Compliance Docs`. Once you have those, please analyze my current changes in the PR: Did we include all the necessary languages for the Terms of Service download?
+    Get the contents of the Copilot Space `<username> OctoCAT Supply Compliance Docs`. Once you have those, please analyze my current changes in the current branch: Did we include all the necessary languages for the Terms of Service download?
     ```
+
+   > You will need to allow the tool call.  If successful you should see a green check.  Also note that it will likely first look in your personal namespace which will fail and then need to list all Spaces before finding the correct one.  This is expected behavior.  You could be more specific in your prompt to state the organization the space is in if desired. 
 
 5. Additional prompts at your disposal:
 
@@ -326,7 +330,7 @@ Here we will use GitHub's remote Model Context Protocol (MCP) server to retrieve
     ```
 
     ```txt
-    We need to implement a Cookie Banner. Implement it according to the compliance requirements we have in our Copilot Space `OD OctoCAT Supply Compliance Docs`.
+    We need to implement a Cookie Banner. Implement it according to the compliance requirements we have in our Copilot Space `<username> OctoCAT Supply Compliance Docs`.
     ```
 
 Spaces provided additional compliance context for Copilot to reference when analyzing your code changes.  However, you could also access them directly as a chat bot at https://github.com/copilot/spaces if you just want to ask questions about the content.  
@@ -335,7 +339,7 @@ Spaces provided additional compliance context for Copilot to reference when anal
 
 ✅ **Custom Instructions** - Team standards encoded once, applied everywhere  
 ✅ **Path-Specific Instructions** - Different rules for different file types  
-✅ **Handoff Files** - Transfer context between sessions or developers
+✅ **Handoff Files** - Transfer context between sessions, developers, or agents
 ✅ **Copilot Spaces** - Providing curated, shared context for use with GitHub Copilot
 
 **Time Investment:** 30 minutes  
@@ -353,8 +357,8 @@ Spaces provided additional compliance context for Copilot to reference when anal
 
 **Scenario:** You need BDD tests for the cart feature.
 
-1. Go to your GitHub repository
-2. Click **Agents Panel** (top right icon next to Copilot...)
+1. Go to your copy of the octocatSupply GitHub repository
+2. Click **Agents Panel** (Cloud icon on top right next to Copilot...)
 3. Select the main branch for working (should be preselected)
 4. Choose **BDD Specialist** agent
 5. Prompt:
@@ -368,9 +372,10 @@ Spaces provided additional compliance context for Copilot to reference when anal
 
 ### Step 2: Assign Issues to Coding Agent
 
-1. In your IDE, open `.github/prompts/demo-cart-page.prompt.md`
-2. The GitHub MCP server should already be started (from Use Case 3).  If not, start it now by hitting Cmd/Ctrl + Shift + P and selecting **MCP: List Servers**, selecting `github-remote`, and clicking `Start Server`.
-3. In the Copilot Chat panel, clear your history, ensure you are in agent mode and select a base model like `GPT 4.1`.  Have Copilot open an issue for you.  Prompt:
+1. While that is working, go back to your IDE and open `.github/prompts/demo-cart-page.prompt.md`
+2. Switch back to the main branch (`git checkout main`)
+3. The GitHub MCP server should already be started (from Use Case 3).  If not, start it now by hitting Cmd/Ctrl + Shift + P and selecting **MCP: List Servers**, selecting `github-remote`, and clicking `Start Server`.
+4. In the Copilot Chat panel, clear your history, ensure you are in agent mode and select a base model like `GPT 4.1`.  Have Copilot open an issue for you.  Prompt:
    ```text
    Create a GitHub issue with the title "Implement Recommendations Feature" using the contents in the demo-cart-page.prompt.md file as the body.
    ```
@@ -384,15 +389,18 @@ Spaces provided additional compliance context for Copilot to reference when anal
 
 ### Step 3: Monitor from Mission Control
 
-1. Navigate to <https://github.com/copilot/agents>
+1. Navigate to https://github.com/copilot/agents
 2. See all your active agent sessions (in this case you should have the BDD Specialist session we started first and the cart feature coding session we started second)
 3. Click on the BDD session that should be in progress:
    - Note you can view real-time progress and see commands executed
-   - Also see the pull request contents
+     - Each `>` can be expanded to see more detail
+   - Also see the pull request details on the right
 4. **Steer mid-session by prompting Copilot:**
    ```text
    While you're at it, add error handling for network failures
    ```
+
+   > Copilot will incorporate your feedback as it works.
 
 ### Step 4: Use API Specialist for Backend Work
 
@@ -405,6 +413,9 @@ Spaces provided additional compliance context for Copilot to reference when anal
    PUT /api/profiles/:id
    DELETE /api/profiles/:id
    ```
+
+   > `Enter` starts the task.  So copy/paste this rather than typing it out.
+
 3. Copilot Coding Agent will spin up another environment and implement the endpoint with proper error handling, validation, and Swagger docs
 
 ### What You Learned
@@ -427,22 +438,26 @@ Spaces provided additional compliance context for Copilot to reference when anal
 
 ### Step 1: Assign Code Review Agent
 
-1. In your repo, find the pull request `Feature: Add ToS Download` and open it.  
-2. Assign **Copilot** as a reviewer 
-3. Scroll down to the bottom of the pull request and you should see a message that you requested a review from Copilot.
+1. In your repo, find the branch, `feature-add-tos-download`, and change into it.  
+2. Click the `Contribute` button and press `Open Pull Request`
+3. For title, use `Feature: Add ToS Download`.  
+4. For Description, Click the Copilot icon and select `Summary` to have Copilot create the description for you! 
+5. Once done, click `Create pull request`
+6. Assign **Copilot** as a reviewer (Upper right side menu)
+7. Scroll down to the bottom of the pull request and you should see a message that you requested a review from Copilot.
 
 ### Step 2: Review Runs in GitHub Actions
 
-1. Navigate to **Actions → Copilot Code Review**
+1. Navigate to the **Actions** tab and click on the **Copilot Code Review** workflow run
 2. Notice it runs:
    - **CodeQL** security analysis
-   - **ESLint** code quality checks
-3. For awareness, Code Review agent has access to the **Code Graph** to analyze broader context.  Meaning it not only sees the PR changes, but also related files and dependencies.
-4. Review runs independently - no blocking your workflow
+   - **ESLint** code quality checks (in Agent)
+3. For awareness, Code Review agent now has access to the **Code Graph** to analyze broader context.  Meaning it not only sees the PR changes, but also related files and dependencies.
+4. Review runs independently - not blocking your workflow
 
 ### Step 3: Review Enhanced Feedback
 
-Once the Actions run has completed, go back to the pull request.  You should see Copilot's review (typically starting with a 'Pull Request Overview' section).  The review includes:
+Once the Actions run has completed, go back to the pull request.  You should see Copilot's review (typically starting with a **Pull Request Overview** section).  The review includes:
 
 - **Security findings** from CodeQL scan
 - **Code quality issues** from ESLint
@@ -474,6 +489,7 @@ Copilot is not able to group changes in existing pull requests created by humans
 ### What You Learned
 
 ✅ **Enhanced Code Review** - Security scanning built-in  
+✅ **Pull Request Summaries** - Auto-generated from diffs
 ✅ **Actions Integration** - Reviews run independently and are auditable  
 ✅ **Automatic Implementation** - Hand fixes back to agent  
 
@@ -494,7 +510,7 @@ Copilot is not able to group changes in existing pull requests created by humans
 2. Click **Enable Code Quality**
 3. Wait for initial scan (this takes a few minutes)
 
-Code Quality uses CodeQL and AI to identify maintainability issues in your codebase.  Similar to other agents, it will also use GitHub Actions to run scans.  You can see the initial run under **Actions → CodeQL** with the initial job being `Code Quality: CodeQL Setup`.
+Code Quality is a new preview feature.  It uses CodeQL and AI to identify maintainability issues in your codebase.  Similar to other agents, it will also use GitHub Actions to run scans.  You can see the initial run under **Actions → CodeQL** with the initial job being `Code Quality: CodeQL Setup`.
 
 ### Step 2: Review and Fix Code Quality Issues
 
@@ -508,23 +524,7 @@ Code Quality uses CodeQL and AI to identify maintainability issues in your codeb
 
 Note - This doesn't work in this demo environment.  This may still be in private preview and not enabled here.  The steps are left here for future reference.
 
-### Step 3: Handle Secret Scanning with Extended Metadata
-
-Note your organization must have GitHub Advanced Security enabled for this feature. 
-
-1. Navigate to the repository's **Settings → Advanced Security**
-2. Verify that GitHub Advanced Security and Secret Protection are enabled
-3. Click **Enable** for `Extended metadata`
-4. Go to **Security → Secret scanning → Default** and 
-5. Click **Verify Secret**
-6. Enable **Extended Metadata** from settings link
-7. Return to alert - now see:
-   - **Validity status** (is it still active?)
-   - **Organization name**
-   - **Owner name**
-   - Direct contact info for rotation
-
-### Step 4: Assign CodeQL Alerts to Coding Agent
+### Step 3: Assign CodeQL Alerts to Coding Agent
 
 1. Navigate to **Security → Code scanning**
 2. Find "Database query built from user-controlled sources"
@@ -538,7 +538,7 @@ Note your organization must have GitHub Advanced Security enabled for this featu
    - Generate a fix
    - Test the fix
 
-### Step 5: Bulk Fix with Security Campaigns (Optional)
+### Step 4: Bulk Fix with Security Campaigns (Optional)
 
 This step is for awareness.  Please don't execute it!  There is a limit of 10 active security campaigns in an organization and more people doing this workshop!  However, here is how you remediate at scale.  Identify and filter by similar alerts:
 
@@ -550,7 +550,6 @@ This step is for awareness.  Please don't execute it!  There is a limit of 10 ac
 ### What You Learned
 
 ✅ **Code Quality** - AI-powered maintainability scanning  
-✅ **Extended Secret Metadata** - Context for faster remediation  
 ✅ **CodeQL + Coding Agent** - Automatic vulnerability fixes  
 ✅ **Security Campaigns** - Bulk remediation workflows
 
@@ -580,9 +579,11 @@ This step is for awareness.  Please don't execute it!  There is a limit of 10 ac
    How does it handle database connections and error mapping?
    ```
 
+   > Agent mode will automatically analyze the workspace.  In Ask mode you must specify `@workspace` to get this behavior. 
+
 ### Step 2: Add Documentation
 
-1. Switch to `Agent` mode
+1. Switch to `Agent` mode.  Use `Auto` for model and Copilot will pick the best one (and give a 10% discount on requests).
 2. Prompt:
    ```text
    Add comprehensive JSDoc comments to all functions in suppliersRepo.ts.
@@ -645,7 +646,6 @@ This step is for awareness.  Please don't execute it!  There is a limit of 10 ac
    - Common troubleshooting issues
    - Link to all other documentation
    ```
-
 
 Copilot is great at reviewing code and generating documentation.  Keep in mind you could always assign this type of task to Coding Agent if you wanted to delegate it.
 

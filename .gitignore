@@ -19,6 +19,7 @@ cleanup-results-*.json
 
 # Actual attendee data
 attendees.csv
+attendees*.csv
 
 # OS generated files
 .DS_Store

@@ -106,6 +106,8 @@ Grab the workshop-release.tar.gz file from the demo_setup_scripts repository rel
 
 Create repositories for all attendees:
 
+> A note on rate limiting.  The deploy script is estimated at 21 API calls per attendee.  For 100 users that is 2100 API calls.  Still well within a PAT limit of 5000 per hour, but be aware if you are provisioning many users.  A GitHub app is a valid alternative if you need higher limits.
+
 ```bash
 npm start
 ```
@@ -115,6 +117,8 @@ Or directly with Node.js:
 ```bash
 node setup-repos.js
 ```
+
+> At a scale of 100-150 attendees, the script is optimized to run in about 15-20 minutes by processing multiple attendees and repositories concurrently while respecting GitHub's rate limits.
 
 ### Repository Cleanup
 
