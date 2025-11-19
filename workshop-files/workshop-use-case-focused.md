@@ -307,7 +307,7 @@ Here we will use GitHub's remote Model Context Protocol (MCP) server to retrieve
    - Select the `github-remote` server
    - Click "Start Server"
    - This will say "The MCP Server Definition 'github-remote' wants to authenticate to GitHub." Click "Allow" to continue
-   - You will be redirectoed to an OAUTH flow.  Click 'Continue' on the account you are using.  
+   - You will be redirected to an OAUTH flow.  Click 'Continue' on the account you are using.  
    - If the organization for your repo requires SSO, you may need to authenticate that as well.  If not you can just click 'Continue' again.
 2. Check out the `feature-add-tos-download` branch.
    `git checkout feature-add-tos-download` (you may need to `git stash` first)
