@@ -421,7 +421,7 @@ class WorkshopRepoSetup {
       if (error.status === 422 && error.message.includes('name already exists')) {
         throw new Error(`Repository ${newRepoName} already exists (was not caught by pre-check)`);
       }
-      throw new Error(`Repository creation failed.: ${error.message}`);
+      throw new Error(`Repository creation failed: ${error.message}`);
     }
 
     console.log(`  ✅ Created empty repository: ${CONFIG.targetOrg}/${newRepoName}`);
