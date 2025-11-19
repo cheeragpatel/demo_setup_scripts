@@ -30,6 +30,11 @@ const CONFIG = {
     'demo-contents/octocatSupply/nodejs/CONTRIBUTING.md',
     'demo-contents/octocatSupply/nodejs-feature-add-tos-download/CONTRIBUTING.md',
     'demo-contents/octocatSupply/nodejs-feature-add-cart-page/CONTRIBUTING.md',
+
+    // Remove ca.key secret (optional)
+    'demo-contents/octocatSupply/nodejs/api/ca.key',
+    'demo-contents/octocatSupply/nodejs-feature-add-tos-download/ca.key',
+    'demo-contents/octocatSupply/nodejs-feature-add-cart-page/ca.key',
     // Example: Remove .octodemo directory from all repos
     // 'demo-contents/octocatSupply/nodejs/.octodemo',
     // 'demo-contents/octocatSupply/nodejs-feature-add-cart-page/.octodemo',
@@ -80,6 +85,19 @@ const CONFIG = {
     'demo-contents/octocatSupply/nodejs-feature-add-tos-download/docs/workshop-use-case-focused.md': {
       type: 'file',
       source: './workshop-files/workshop-use-case-focused.md'
+    },
+    // Replace .env.example with sanitized version to avoid push protection
+    'demo-contents/octocatSupply/nodejs/api/.env.example': {
+      type: 'file',
+      source: './workshop-files/API-.env.example'
+    },
+    'demo-contents/octocatSupply/nodejs-feature-add-cart-page/api/.env.example': {
+      type: 'file',
+      source: './workshop-files/API-.env.example'
+    },
+    'demo-contents/octocatSupply/nodejs-feature-add-tos-download/api/.env.example': {
+      type: 'file',
+      source: './workshop-files/API-.env.example'
     },
 
     // Example: Add a workshop-specific README
