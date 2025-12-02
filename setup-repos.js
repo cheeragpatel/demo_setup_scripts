@@ -480,9 +480,14 @@ class WorkshopRepoSetup {
       console.log(`  📋 Found ${branches.length} branch(es): ${branches.join(', ')}`);
       
       // Determine main branch and process it first
-      let mainBranchDir = branches.find(b => b === sourceRepoName || b === 'main');
+      // First, try to use the mainBranch from metadata
+      let mainBranchDir = branches.find(b => b === repoConfig.mainBranch);
       if (!mainBranchDir) {
-        // If no obvious main branch, use the first one
+        // Fallback: try sourceRepoName or 'main' as common defaults
+        mainBranchDir = branches.find(b => b === sourceRepoName || b === 'main');
+      }
+      if (!mainBranchDir) {
+        // Last resort: use the first directory found
         mainBranchDir = branches[0];
       }
       
@@ -499,6 +504,9 @@ class WorkshopRepoSetup {
       
       await this.runGitCommand('git add -A', tempDir);
       await this.runGitCommand('git commit -m "Initial commit from release package" --allow-empty', tempDir);
+      
+      // Rename the initial branch to 'main' to match GitHub convention
+      await this.runGitCommand('git branch -M main', tempDir);
       
       // Process additional branches
       for (const branchDir of branches) {
@@ -538,6 +546,15 @@ class WorkshopRepoSetup {
       const targetUrlWithAuth = targetCloneUrl.replace('https://', `https://${CONFIG.githubToken}@`);
       await this.runGitCommand(`git remote add origin ${targetUrlWithAuth}`, tempDir);
       await this.runGitCommand('git push -u origin --all', tempDir);
+      
+      // Set 'main' as the default branch in the repository
+      console.log(`  🔧 Setting main as default branch...`);
+      this.apiCallCount++;
+      await octokit.rest.repos.update({
+        owner: CONFIG.targetOrg,
+        repo: newRepoName,
+        default_branch: 'main'
+      });
       
       console.log(`  ✅ Successfully populated repository from ${repoConfig.contentType}`);
       
@@ -771,32 +788,8 @@ class WorkshopRepoSetup {
         console.log(`  ⚠️ Could not update repository settings: ${error.message}`);
       }
 
-      // Try to use Codespaces API if available
-      try {
-        if (octokit.rest.codespaces && octokit.rest.codespaces.createRepoCodespacesPrebuild) {
-          console.log(`  🏗️ Creating prebuild configuration for main branch...`);
-          
-          const prebuildConfig = await octokit.rest.codespaces.createRepoCodespacesPrebuild({
-            owner: CONFIG.targetOrg,
-            repo: repoName,
-            ref: 'refs/heads/main'
-          });
-          
-          console.log(`  ✅ Prebuild configuration created (ID: ${prebuildConfig.data.id})`);
-          console.log(`  ℹ️ Prebuild will trigger on devcontainer configuration changes`);
-        } else {
-          throw new Error('Codespaces prebuild API not available');
-        }
-      } catch (apiError) {
-        console.log(`  ℹ️ Codespaces prebuild API not available: ${apiError.message}`);
-        console.log(`  💡 Manual setup: Go to repository Settings → Codespaces → Set up prebuilds`);
-        
-        if (hasDevcontainer) {
-          console.log(`  🎯 Devcontainer detected - Codespaces will work with existing configuration`);
-        } else {
-          console.log(`  🔧 Consider adding a .devcontainer/devcontainer.json for custom environment`);
-        }
-      }
+      // Note: GitHub does not provide a public API for creating prebuilds
+      console.log(`  ℹ️ Prebuild API does not exist - Manual setup: https://github.com/${CONFIG.targetOrg}/${repoName}/settings/codespaces`);
 
       console.log(`  ✅ Codespaces setup completed for ${repoName}`);
       
@@ -884,10 +877,15 @@ class WorkshopRepoSetup {
           }
 
           // Prebuild Codespaces for the repository (best effort, don't fail if this fails)
-          try {
-            await this.prebuildCodespaces(newRepoName);
-          } catch (error) {
-            console.log(`  ℹ️  Codespaces setup skipped for ${newRepoName}: ${error.message}`);
+          // Only create prebuilds for octocatSupply repos
+          if (sourceRepoName.toLowerCase().includes('octocatsupply')) {
+            try {
+              await this.prebuildCodespaces(newRepoName);
+            } catch (error) {
+              console.log(`  ℹ️  Codespaces setup skipped for ${newRepoName}: ${error.message}`);
+            }
+          } else {
+            console.log(`  ⏭️  Skipping Codespaces prebuild for ${newRepoName} (prebuilds only enabled for octocatSupply)`);
           }
 
           console.log(`  ✅ Successfully set up repository: ${CONFIG.targetOrg}/${newRepoName}`);

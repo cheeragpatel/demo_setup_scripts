@@ -23,6 +23,7 @@ This script automatically creates demo repositories for workshop attendees by fo
    - `admin:org` (Full control of orgs and teams, read and write org projects)
    - `workflow` (Update GitHub Action workflows)
    - `delete_repo` (Only needed if you plan to run the cleanup script.  It's 3 repos per attendee so likely the easiest way to clean up.)
+   - `codespace` (Read and write access to Codespaces configurations - Only if you want Codespaces prebuilds) -- SKIP THIS until an API exists for pre-builds...
 3. **Admin access** to the target organization where repositories will be created
 4. **Access** to the source repository that will be forked
 
@@ -302,6 +303,7 @@ Prebuilds will **NOT** be triggered on:
 - ❌ Regular code commits and pushes
 - ❌ Pull request creation or updates
 - ❌ Changes to non-devcontainer files
+- ❌ Repos other than octocatSupply
 
 ## Security Notes
 
