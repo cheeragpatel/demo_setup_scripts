@@ -326,9 +326,8 @@ class WorkshopRepoSetup {
   getRepositoriesFromMetadata(metadata) {
     const repos = {};
     
-    // Process both demo-contents and static-contents
+    // Only process demo-contents repositories (skip static-contents)
     const demoContents = metadata.demoContents || {};
-    const staticContents = metadata.staticContents || {};
     
     // Add demo-contents repositories
     for (const [repoName, repoConfig] of Object.entries(demoContents)) {
@@ -340,22 +339,9 @@ class WorkshopRepoSetup {
       };
     }
     
-    // Add static-contents repositories
-    for (const [repoName, repoConfig] of Object.entries(staticContents)) {
-      repos[repoName] = {
-        mainBranch: repoConfig.mainBranch,
-        additionalBranches: repoConfig.additionalBranches || [],
-        templatedFiles: repoConfig.templatedFiles || [],
-        contentType: 'static-contents' // Track which type this came from
-      };
-    }
-    
     const demoCount = Object.keys(demoContents).length;
-    const staticCount = Object.keys(staticContents).length;
     
-    console.log(`📋 Found ${Object.keys(repos).length} total repositories:`);
-    if (demoCount > 0) console.log(`   - ${demoCount} demo-contents repositories`);
-    if (staticCount > 0) console.log(`   - ${staticCount} static-contents repositories`);
+    console.log(`📋 Found ${demoCount} demo-contents repository(ies) to create per attendee`);
     
     return repos;
   }
