@@ -19,19 +19,39 @@ const CONFIG = {
   workingDir: process.env.WORKING_DIR || './temp-release-setup',
   enableCodespaces: process.env.ENABLE_CODESPACES_PREBUILDS === 'true' || true, // Default to true
   
+  // Workshop / Demo Options (used to render template variables in repo content)
+  customerName: process.env.CUSTOMER_NAME || 'Copilot',
+  workshopDuration: process.env.WORKSHOP_DURATION || 'Full Day (8 hours)',
+  numberOfParticipants: process.env.NUMBER_OF_PARTICIPANTS || '',
+  additionalNotes: process.env.ADDITIONAL_NOTES || '',
+  backend: process.env.BACKEND || 'nodejs',
+  
   // Performance & Rate Limiting
-  concurrentAttendees: parseInt(process.env.CONCURRENT_ATTENDEES || '3'), // Process N attendees at once
-  concurrentRepos: parseInt(process.env.CONCURRENT_REPOS || '2'), // Process N repos per attendee at once
+  concurrentAttendees: parseInt(process.env.CONCURRENT_ATTENDEES || '5'), // Process N attendees at once
+  concurrentRepos: parseInt(process.env.CONCURRENT_REPOS || '3'), // Process N repos per attendee at once
   delayBetweenBatches: parseInt(process.env.DELAY_BETWEEN_BATCHES || '2000'), // ms delay between batches
+  delayBetweenRepos: parseInt(process.env.DELAY_BETWEEN_REPOS || '3000'), // ms stagger between repo creations within a batch
   rateLimitBuffer: parseInt(process.env.RATE_LIMIT_BUFFER || '100'), // Keep this many API calls in reserve
-  retryAttempts: parseInt(process.env.RETRY_ATTEMPTS || '3'), // Number of retries for failed operations
-  retryDelay: parseInt(process.env.RETRY_DELAY || '5000') // ms delay between retries
+  retryAttempts: parseInt(process.env.RETRY_ATTEMPTS || '5'), // Number of retries for failed operations
+  retryDelay: parseInt(process.env.RETRY_DELAY || '3000') // ms delay between retries
 };
 
 // Initialize Octokit
 const octokit = new Octokit({
   auth: CONFIG.githubToken,
 });
+
+// Set up log file streaming — all console output goes to both stdout and a log file
+const LOG_FILE = process.env.LOG_FILE || `setup-repos-${new Date().toISOString().slice(0, 10)}.log`;
+const logStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
+const origLog = console.log;
+const origWarn = console.warn;
+const origErr = console.error;
+const timestamp = () => new Date().toISOString().slice(11, 19);
+console.log = (...args) => { const line = args.join(' '); origLog(line); logStream.write(`[${timestamp()}] ${line}\n`); };
+console.warn = (...args) => { const line = args.join(' '); origWarn(line); logStream.write(`[${timestamp()}] WARN: ${line}\n`); };
+console.error = (...args) => { const line = args.join(' '); origErr(line); logStream.write(`[${timestamp()}] ERROR: ${line}\n`); };
+console.log(`📝 Logging to ${LOG_FILE} — tail -f ${LOG_FILE} to follow progress`);
 
 class WorkshopRepoSetup {
   constructor() {
@@ -99,31 +119,45 @@ class WorkshopRepoSetup {
   }
   
   async retryOperation(operation, operationName, maxRetries = CONFIG.retryAttempts) {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    let rateLimitRetries = 0;
+    const MAX_RATE_LIMIT_RETRIES = 10;
+
+    for (let attempt = 1; attempt <= maxRetries; ) {
       try {
         return await operation();
       } catch (error) {
-        // Check if it's a rate limit error
-        if (error.status === 403 && error.message.includes('rate limit')) {
-          console.log(`⏰ Rate limit hit during ${operationName}. Checking limits...`);
+        const msg = error.message || '';
+        const status = error.status || 0;
+        const retryAfter = error.response?.headers?.['retry-after'];
+
+        const isSecondaryRateLimit =
+          status === 429 ||
+          (status === 403 && (msg.includes('secondary rate limit') || msg.includes('abuse')));
+        const isPrimaryRateLimit = status === 403 && msg.includes('rate limit');
+
+        if (isSecondaryRateLimit && rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
+          rateLimitRetries++;
+          const waitTime = retryAfter
+            ? (parseInt(retryAfter, 10) + 1) * 1000
+            : Math.min(60000 * rateLimitRetries, 300000);
+          console.log(`⏰ Secondary rate limit (${status}) during ${operationName}. Waiting ${Math.round(waitTime / 1000)}s (retry-after: ${retryAfter || 'none'}, attempt ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES})...`);
+          await this.sleep(waitTime);
+          continue; // don't increment attempt — rate limits are not real failures
+        }
+
+        if (isPrimaryRateLimit) {
+          console.log(`⏰ Primary rate limit hit during ${operationName}. Checking limits...`);
           await this.checkRateLimit();
           continue;
         }
-        
-        // Check if it's a secondary rate limit (abuse detection)
-        if (error.status === 403 && error.message.includes('abuse')) {
-          const waitTime = Math.min(60000 * attempt, 300000); // Up to 5 minutes
-          console.log(`⏰ Secondary rate limit hit. Waiting ${waitTime / 1000}s before retry ${attempt}/${maxRetries}...`);
-          await this.sleep(waitTime);
-          continue;
-        }
-        
-        if (attempt === maxRetries) {
+
+        if (attempt >= maxRetries) {
           throw error;
         }
-        
-        console.log(`⚠️  Attempt ${attempt}/${maxRetries} failed for ${operationName}: ${error.message}`);
-        await this.sleep(CONFIG.retryDelay * attempt); // Exponential backoff
+
+        console.log(`⚠️  Attempt ${attempt}/${maxRetries} failed for ${operationName}: ${msg}`);
+        await this.sleep(CONFIG.retryDelay * attempt);
+        attempt++;
       }
     }
   }
@@ -204,10 +238,20 @@ class WorkshopRepoSetup {
       demo_slug: this.metadata?.shortname || sourceRepoName,
       demo_org: {
         owner: CONFIG.targetOrg,
-        github_instance_url: 'https://github.com'
+        github_instance_url: 'https://github.com',
+        container_registry_url: 'https://ghcr.io'
       },
       repository_name: newRepoName,
-      source_repository: sourceRepoName
+      source_repository: sourceRepoName,
+      actor: CONFIG.targetOrg,
+      demo_options: {
+        customer_name: CONFIG.customerName,
+        workshop_duration: CONFIG.workshopDuration,
+        number_of_participants: CONFIG.numberOfParticipants,
+        additional_notes: CONFIG.additionalNotes,
+        backend: CONFIG.backend,
+        needs_azure_deployment: 'No'
+      }
     };
     
     return context;
@@ -325,23 +369,37 @@ class WorkshopRepoSetup {
 
   getRepositoriesFromMetadata(metadata) {
     const repos = {};
+    const overlays = {};
     
     // Only process demo-contents repositories (skip static-contents)
     const demoContents = metadata.demoContents || {};
     
-    // Add demo-contents repositories
+    // Separate base repos from overlay repos
     for (const [repoName, repoConfig] of Object.entries(demoContents)) {
-      repos[repoName] = {
+      const entry = {
         mainBranch: repoConfig.mainBranch,
         additionalBranches: repoConfig.additionalBranches || [],
         templatedFiles: repoConfig.templatedFiles || [],
-        contentType: 'demo-contents' // Track which type this came from
+        contentType: 'demo-contents'
       };
+
+      if (repoName.includes('overlay')) {
+        overlays[repoName] = entry;
+      } else {
+        repos[repoName] = entry;
+      }
     }
     
-    const demoCount = Object.keys(demoContents).length;
+    // Attach overlays to each base repo so their content is merged on top
+    if (Object.keys(overlays).length > 0) {
+      for (const repoName of Object.keys(repos)) {
+        repos[repoName].overlays = overlays;
+      }
+      console.log(`📋 Found ${Object.keys(overlays).length} overlay(s) to merge into base repo(s): ${Object.keys(overlays).join(', ')}`);
+    }
     
-    console.log(`📋 Found ${demoCount} demo-contents repository(ies) to create per attendee`);
+    const baseCount = Object.keys(repos).length;
+    console.log(`📋 Found ${baseCount} base repository(ies) to create per attendee`);
     
     return repos;
   }
@@ -370,19 +428,20 @@ class WorkshopRepoSetup {
     });
   }
 
-  async checkRepoExists(repoName) {
+  /**
+   * Check repo existence and population using git ls-remote (no API call).
+   * Returns 'populated' | 'empty' | 'missing'.
+   */
+  async checkRepoState(repoName) {
+    const url = `https://${CONFIG.githubToken}@github.com/${CONFIG.targetOrg}/${repoName}.git`;
     try {
-      this.apiCallCount++;
-      await octokit.rest.repos.get({
-        owner: CONFIG.targetOrg,
-        repo: repoName
-      });
-      return true;
-    } catch (error) {
-      if (error.status === 404) {
-        return false;
-      }
-      throw error;
+      const { exec } = require('child_process');
+      const { promisify } = require('util');
+      const execAsync = promisify(exec);
+      const { stdout } = await execAsync(`git ls-remote --heads "${url}" 2>/dev/null`, { timeout: 15000 });
+      return stdout.trim().length > 0 ? 'populated' : 'empty';
+    } catch {
+      return 'missing';
     }
   }
 
@@ -407,7 +466,8 @@ class WorkshopRepoSetup {
       if (error.status === 422 && error.message.includes('name already exists')) {
         throw new Error(`Repository ${newRepoName} already exists (was not caught by pre-check)`);
       }
-      throw new Error(`Repository creation failed: ${error.message}`);
+      // Preserve the original error so retryOperation can inspect status/headers
+      throw error;
     }
 
     console.log(`  ✅ Created empty repository: ${CONFIG.targetOrg}/${newRepoName}`);
@@ -437,7 +497,7 @@ class WorkshopRepoSetup {
       throw new Error(`Source path not found: ${sourcePath}`);
     }
     
-    const tempDir = `/tmp/workshop-populate-${Date.now()}`;
+    const tempDir = `/tmp/workshop-populate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     
     try {
       // Initialize git repository first
@@ -482,11 +542,15 @@ class WorkshopRepoSetup {
       const mainBranchPath = path.join(sourcePath, mainBranchDir);
       await this.copyDirectory(mainBranchPath, tempDir);
       
+      // Apply overlays on top of base content for main branch
+      await this.applyOverlays(repoConfig, extractDir, mainBranchDir, tempDir);
+      
+      // Prune unwanted content (keep only api-nodejs as api/, remove demo/)
+      await this.pruneContent(tempDir);
+      
       // Render templates for main branch
-      if (repoConfig.templatedFiles && repoConfig.templatedFiles.length > 0) {
-        const templateContext = this.buildTemplateContext(newRepoName, sourceRepoName, repoConfig);
-        await this.renderTemplates(repoConfig.templatedFiles, tempDir, templateContext);
-      }
+      const templateContext = this.buildTemplateContext(newRepoName, sourceRepoName, repoConfig);
+      await this.renderDetectedTemplates(tempDir, templateContext);
       
       await this.runGitCommand('git add -A', tempDir);
       await this.runGitCommand('git commit -m "Initial commit from release package" --allow-empty', tempDir);
@@ -517,30 +581,27 @@ class WorkshopRepoSetup {
         // Copy branch content
         await this.copyDirectory(branchPath, tempDir);
         
+        // Apply overlays on top of base content for this branch
+        await this.applyOverlays(repoConfig, extractDir, branchDir, tempDir);
+        
+        // Prune unwanted content
+        await this.pruneContent(tempDir);
+        
         // Render templates for this branch
-        if (repoConfig.templatedFiles && repoConfig.templatedFiles.length > 0) {
-          const templateContext = this.buildTemplateContext(newRepoName, sourceRepoName, repoConfig);
-          await this.renderTemplates(repoConfig.templatedFiles, tempDir, templateContext);
-        }
+        const branchTemplateContext = this.buildTemplateContext(newRepoName, sourceRepoName, repoConfig);
+        await this.renderDetectedTemplates(tempDir, branchTemplateContext);
         
         // Commit branch content
         await this.runGitCommand('git add -A', tempDir);
         await this.runGitCommand(`git commit -m "Content for ${branchName} branch" --allow-empty`, tempDir);
       }
       
-      // Push all branches
+      // Push all branches — push main first so GitHub sets it as default
       const targetUrlWithAuth = targetCloneUrl.replace('https://', `https://${CONFIG.githubToken}@`);
       await this.runGitCommand(`git remote add origin ${targetUrlWithAuth}`, tempDir);
+      await this.runGitCommand('git checkout main', tempDir);
+      await this.runGitCommand('git push -u origin main', tempDir);
       await this.runGitCommand('git push -u origin --all', tempDir);
-      
-      // Set 'main' as the default branch in the repository
-      console.log(`  🔧 Setting main as default branch...`);
-      this.apiCallCount++;
-      await octokit.rest.repos.update({
-        owner: CONFIG.targetOrg,
-        repo: newRepoName,
-        default_branch: 'main'
-      });
       
       console.log(`  ✅ Successfully populated repository from ${repoConfig.contentType}`);
       
@@ -550,6 +611,100 @@ class WorkshopRepoSetup {
     } finally {
       // Clean up temp directory
       await this.safeCleanup(tempDir);
+    }
+  }
+
+  /**
+   * Remove unwanted directories and rename api-nodejs to api.
+   * Keeps only the configured backend (default: nodejs) and removes demo/.
+   */
+  async pruneContent(tempDir) {
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
+
+    const backend = CONFIG.backend || 'nodejs';
+    const apiSource = path.join(tempDir, `api-${backend}`);
+    const apiTarget = path.join(tempDir, 'api');
+    const removeDirs = ['demo', 'api-java', 'api-nodejs', 'api-python', 'api-dotnet']
+      .filter(d => d !== `api-${backend}`);
+
+    // Rename api-<backend> to api (if it exists and api/ doesn't already)
+    try {
+      await fsPromises.access(apiSource);
+      try { await fsPromises.access(apiTarget); } catch {
+        await fsPromises.rename(apiSource, apiTarget);
+        console.log(`  🔧 Renamed api-${backend}/ → api/`);
+      }
+    } catch { /* api-<backend> doesn't exist in this content, skip */ }
+
+    // Remove unwanted directories
+    for (const dir of removeDirs) {
+      const dirPath = path.join(tempDir, dir);
+      try {
+        await fsPromises.access(dirPath);
+        await fsPromises.rm(dirPath, { recursive: true, force: true });
+      } catch { /* doesn't exist, skip */ }
+    }
+  }
+
+  /**
+   * Apply overlay content on top of base content in the working directory.
+   * Files inside the overlay's "overlays/" subdirectory are placed at the repo root.
+   * Falls back to the overlay's main branch if no matching branch directory exists.
+   */
+  async applyOverlays(repoConfig, extractDir, currentBranchDir, tempDir) {
+    if (!repoConfig.overlays) return;
+
+    for (const [overlayName, overlayConfig] of Object.entries(repoConfig.overlays)) {
+      const overlayBasePath = path.join(extractDir, 'demo-contents', overlayName);
+
+      try {
+        await fsPromises.access(overlayBasePath);
+      } catch (error) {
+        if (error.code === 'ENOENT') {
+          console.log(`  ⚠️ Overlay source not found: ${overlayBasePath}, skipping`);
+        } else {
+          console.warn(`  ⚠️ Cannot access overlay source ${overlayBasePath}: ${error.code || error.message}`);
+        }
+        continue;
+      }
+
+      // List available overlay branch dirs
+      const overlayDirs = (await fsPromises.readdir(overlayBasePath, { withFileTypes: true }))
+        .filter(d => d.isDirectory())
+        .map(d => d.name);
+
+      // Pick matching branch dir, or fall back to overlay's mainBranch
+      let overlayBranchDir = overlayDirs.find(d => d === currentBranchDir);
+      if (!overlayBranchDir) {
+        overlayBranchDir = overlayDirs.find(d => d === overlayConfig.mainBranch) || overlayDirs[0];
+      }
+
+      // Copy from the "overlays/" subdirectory so files land at the repo root.
+      // Retry on transient I/O errors (e.g. EMFILE under heavy concurrency).
+      const overlayContentPath = path.join(overlayBasePath, overlayBranchDir, 'overlays');
+      let applied = false;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await fsPromises.access(overlayContentPath);
+          console.log(`  🔀 Applying overlay: ${overlayName}/${overlayBranchDir}/overlays`);
+          await this.copyDirectory(overlayContentPath, tempDir);
+          applied = true;
+          break;
+        } catch (error) {
+          if (error.code === 'ENOENT') {
+            console.log(`  ⚠️ No overlays/ directory in ${overlayName}/${overlayBranchDir}, skipping`);
+            break; // genuinely missing, no point retrying
+          }
+          if (attempt < 3) {
+            console.warn(`  ⚠️ Overlay I/O error (attempt ${attempt}/3, ${error.code || error.message}), retrying...`);
+            await this.sleep(500 * attempt);
+          } else {
+            console.error(`  ❌ Overlay failed after 3 attempts for ${overlayName}/${overlayBranchDir}: ${error.code || error.message}`);
+          }
+        }
+      }
     }
   }
 
@@ -601,6 +756,59 @@ class WorkshopRepoSetup {
           console.error(`    ❌ Failed to render ${templateFile}: ${error.message}`);
           throw error;
         }
+      }
+    }
+  }
+
+  /**
+   * Scan the working directory for files containing template markers (<$ or <%)
+   * and render them through the Liquid template engine.
+   */
+  async renderDetectedTemplates(workingDir, context) {
+    const TEMPLATE_EXTENSIONS = ['.md', '.yml', '.yaml', '.json', '.txt', '.env', '.html'];
+    const TEMPLATE_MARKER = /<%|<\$/;
+
+    const engine = new Liquid({
+      tagDelimiterLeft: '<%',
+      tagDelimiterRight: '%>',
+      outputDelimiterLeft: '<$',
+      outputDelimiterRight: '$>',
+      greedy: false
+    });
+
+    const filesToRender = [];
+
+    const walk = async (dir) => {
+      const entries = await fsPromises.readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.name === '.git') continue;
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await walk(fullPath);
+        } else if (TEMPLATE_EXTENSIONS.includes(path.extname(entry.name).toLowerCase())) {
+          try {
+            const content = await fsPromises.readFile(fullPath, 'utf-8');
+            if (TEMPLATE_MARKER.test(content)) {
+              filesToRender.push({ fullPath, content });
+            }
+          } catch { /* skip unreadable files */ }
+        }
+      }
+    };
+
+    await walk(workingDir);
+
+    if (filesToRender.length === 0) return;
+
+    console.log(`  🎨 Rendering ${filesToRender.length} detected template file(s)...`);
+    for (const { fullPath, content } of filesToRender) {
+      const relPath = path.relative(workingDir, fullPath);
+      try {
+        const rendered = await engine.parseAndRender(content, context);
+        await fsPromises.writeFile(fullPath, rendered, 'utf-8');
+        console.log(`    ✅ Rendered: ${relPath}`);
+      } catch (error) {
+        console.warn(`    ⚠️  Template render failed for ${relPath}: ${error.message}`);
       }
     }
   }
@@ -827,10 +1035,10 @@ class WorkshopRepoSetup {
           // Check rate limit before processing
           await this.waitIfNeeded();
           
-          // Check if repo already exists
-          this.apiCallCount++;
-          if (await this.checkRepoExists(newRepoName)) {
-            console.log(`  ⏭️ Repository ${newRepoName} already exists, skipping...`);
+          // Check repo state via git ls-remote (no API call)
+          const repoState = await this.checkRepoState(newRepoName);
+          if (repoState === 'populated') {
+            console.log(`  ⏭️ Repository ${newRepoName} already exists and has branches, skipping...`);
             this.results.skipped.push({
               attendee,
               repoName: newRepoName,
@@ -839,6 +1047,26 @@ class WorkshopRepoSetup {
             });
             return { status: 'skipped', repoName: newRepoName };
           }
+          if (repoState === 'empty') {
+            console.log(`  🔄 Repository ${newRepoName} exists but is empty, deleting and recreating...`);
+            try {
+              this.apiCallCount++;
+              await octokit.rest.repos.delete({
+                owner: CONFIG.targetOrg,
+                repo: newRepoName
+              });
+              await this.sleep(2000);
+            } catch (deleteError) {
+              console.warn(`  ⚠️ Could not delete empty repo ${newRepoName}: ${deleteError.message}`);
+              this.results.failed.push({
+                attendee,
+                repoName: newRepoName,
+                sourceRepo: sourceRepoName,
+                error: `Empty repo exists but could not be deleted: ${deleteError.message}`
+              });
+              return { status: 'failed', repoName: newRepoName, error: deleteError.message };
+            }
+          }
 
           // Create repository from release content (with retry)
           await this.retryOperation(
@@ -846,20 +1074,20 @@ class WorkshopRepoSetup {
             `create repository ${newRepoName}`
           );
 
-          // Add attendee as collaborator (with retry)
-          await this.retryOperation(
-            () => this.addCollaborator(newRepoName, attendee.githubUsername),
-            `add collaborator to ${newRepoName}`
-          );
+          // Add attendee as collaborator (best effort — don't fail the whole repo)
+          try {
+            await this.retryOperation(
+              () => this.addCollaborator(newRepoName, attendee.githubUsername),
+              `add collaborator to ${newRepoName}`
+            );
+          } catch (collabError) {
+            console.warn(`  ⚠️ Could not add collaborator ${attendee.githubUsername} to ${newRepoName}: ${collabError.message}`);
+          }
 
-          // Create issues from blueprints (only for demo-contents repos)
+          // Track repo for deferred issue creation (done in a second pass)
           if (repoConfig.contentType === 'demo-contents') {
-            try {
-              const issues = await this.loadIssueBlueprints(extractDir, sourceRepoName);
-              await this.createIssues(newRepoName, issues);
-            } catch (error) {
-              console.log(`  ℹ️  Issue creation skipped for ${newRepoName}: ${error.message}`);
-            }
+            this.pendingIssues = this.pendingIssues || [];
+            this.pendingIssues.push({ repoName: newRepoName, sourceRepoName, extractDir });
           }
 
           // Prebuild Codespaces for the repository (best effort, don't fail if this fails)
@@ -939,6 +1167,7 @@ class WorkshopRepoSetup {
 
       // Process attendees in batches for better performance
       console.log(`\n🚀 Processing ${attendees.length} attendees in batches of ${CONFIG.concurrentAttendees}...`);
+      console.log(`   Per-repo delay: ${CONFIG.delayBetweenRepos / 1000}s | Batch delay: ${CONFIG.delayBetweenBatches / 1000}s`);
       const startTime = Date.now();
       
       for (let i = 0; i < attendees.length; i += CONFIG.concurrentAttendees) {
@@ -951,9 +1180,12 @@ class WorkshopRepoSetup {
         // Check rate limit before each batch
         await this.waitIfNeeded();
         
-        // Process batch concurrently
-        const batchPromises = batch.map(attendee => 
-          this.setupReposForAttendee(attendee, repositories, extractDir)
+        // Stagger repo creation: start each attendee with a delay to avoid
+        // hammering the content-creation endpoint simultaneously.
+        const batchPromises = batch.map((attendee, idx) => 
+          this.sleep(idx * CONFIG.delayBetweenRepos).then(() =>
+            this.setupReposForAttendee(attendee, repositories, extractDir)
+          )
         );
         
         await Promise.all(batchPromises);
@@ -976,7 +1208,22 @@ class WorkshopRepoSetup {
       }
       
       const totalTime = Math.round((Date.now() - startTime) / 1000);
-      console.log(`\n✅ All attendees processed in ${totalTime}s (${Math.round(totalTime / 60)}m ${totalTime % 60}s)`);
+      console.log(`\n✅ All repos created in ${totalTime}s (${Math.round(totalTime / 60)}m ${totalTime % 60}s)`);
+
+      // Second pass: create issues (deferred to avoid interleaving with content-creation)
+      if (this.pendingIssues && this.pendingIssues.length > 0) {
+        console.log(`\n📝 Creating issues for ${this.pendingIssues.length} repositories...`);
+        for (const { repoName, sourceRepoName, extractDir: ed } of this.pendingIssues) {
+          try {
+            await this.waitIfNeeded();
+            const issues = await this.loadIssueBlueprints(ed, sourceRepoName);
+            await this.createIssues(repoName, issues);
+          } catch (error) {
+            console.log(`  ℹ️  Issue creation skipped for ${repoName}: ${error.message}`);
+          }
+        }
+        console.log(`✅ Issue creation pass complete`);
+      }
 
       // Print summary
       this.printSummary();
