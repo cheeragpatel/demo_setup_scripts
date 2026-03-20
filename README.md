@@ -1,346 +1,104 @@
-# Workshop Repository Setup Script
+# Workshop Setup Scripts
 
-This script automatically creates demo repositories for workshop attendees by forking a source repository and setting up the required branches for each participant.
-
-## Features
-
-- 📦 Creates complete duplicate repositories (not forks) for each attendee with **internal visibility**
-- 🌿 Copies all branches from source repository (`main`, `feature-add-tos-download`, `feature-add-cart-page`)
-- 📋 Preserves all files, commit history, and branch structure
-- 👤 Adds attendees as admin collaborators to their repositories
-- 🚀 **Prebuilds GitHub Codespaces for fast startup times**
-- ⏭️ Skips repositories that already exist
-- 🧹 **Cleanup functionality to delete all workshop repositories**
-- 📊 Provides detailed progress reporting and summary
-- 💾 Saves results to a JSON file for record keeping
-- 🔍 Dry-run mode for cleanup to preview what will be deleted
+Automates creation of personalized GitHub Copilot workshop repositories for each attendee in a GitHub organization.
 
 ## Prerequisites
 
-1. **Node.js** (tested on node 24.  Others may work)
-2. **GitHub Personal Access Token** with the following permissions:
-   - `repo` (Full control of private repositories)
-   - `admin:org` (Full control of orgs and teams, read and write org projects)
-   - `workflow` (Update GitHub Action workflows)
-   - `delete_repo` (Only needed if you plan to run the cleanup script.  It's 3 repos per attendee so likely the easiest way to clean up.)
-   - `codespace` (Read and write access to Codespaces configurations - Only if you want Codespaces prebuilds) -- SKIP THIS until an API exists for pre-builds...
-3. **Admin access** to the target organization where repositories will be created
-4. **Access** to the source repository that will be forked
+- Node.js 16+
+- GitHub Personal Access Token with scopes: `repo`, `admin:org`, `workflow`, `delete_repo`
+- Admin access to a GitHub organization for workshop repos
 
-## Setup Instructions
+## Setup
 
-### 1. Install Dependencies
+1. Clone this repo and install dependencies:
 
-```bash
-npm install
-```
+   ```bash
+   git clone <this-repo-url> && cd demo-setup-scripts
+   npm install
+   ```
 
-### 2. Configure Environment Variables
+2. Configure environment variables:
 
-Copy the example environment file and update it with your values:
+   ```bash
+   cp .env.example .env
+   ```
 
-```bash
-cp .env.example .env
-```
+   Edit `.env` with your token, org, and workshop settings. See [Configuration](#configuration) below.
 
-Edit `.env` file with your specific configuration:
+3. Add attendees:
 
-```env
-# GitHub Personal Access Token with repo, admin:org, and workflow permissions
-#   -- delete_repo scope is also needed if you plan to run the cleanup script
-GITHUB_TOKEN=your_github_token_here
+   ```bash
+   cp attendees.csv.example attendees.csv
+   ```
 
-# Release Package Configuration
-RELEASE_TARBALL=./workshop-release.tar.gz
+   Edit `attendees.csv` with participant GitHub usernames. See [Attendee CSV Format](#attendee-csv-format) below.
 
-# Target organization where new repos will be created
-TARGET_ORG=your-target-org
+## Usage
 
-# CSV file containing attendee information
-CSV_FILE=attendees.csv
-
-# Working Directory (temporary files)
-WORKING_DIR=./temp-release-setup
-
-# Enable Codespaces prebuilds (true/false)
-ENABLE_CODESPACES_PREBUILDS=true
-
-# Performance & Rate Limiting Configuration
-# For 100-150 attendees, these settings are optimized
-CONCURRENT_ATTENDEES=5          # Process N attendees simultaneously
-CONCURRENT_REPOS=3              # Process N repos per attendee simultaneously
-DELAY_BETWEEN_BATCHES=2000      # Milliseconds delay between batches
-RATE_LIMIT_BUFFER=100           # Keep this many API calls in reserve
-RETRY_ATTEMPTS=3                # Number of retries for failed operations
-RETRY_DELAY=5000                # Milliseconds between retries
-
-```
-
-### 3. Prepare Attendee List
-
-Create a CSV file with attendee information. Use the provided example as a template:
-
-```bash
-cp attendees.csv.example attendees.csv
-```
-
-Edit `attendees.csv` with your attendee information:
-
-```csv
-github_username,email
-johndoe,john.doe@example.com
-janesmith,jane.smith@example.com
-bobwilson,bob.wilson@example.com
-```
-
-**Required columns:**
-- `github_username`: The GitHub username of the attendee
-- `email`: (Optional) Email address for reference -- This is for your records only; the script does not use it.
-
-### 4. Verify Workshop Release Tarball
-
-Grab the workshop-release.tar.gz file from the demo_setup_scripts repository release assets and place it in the root of this repository.
-
-## Running the Script
-
-### Repository Setup
-
-Create repositories for all attendees:
-
-> A note on rate limiting.  The deploy script is estimated at 21 API calls per attendee.  For 100 users that is 2100 API calls.  Still well within a PAT limit of 5000 per hour, but be aware if you are provisioning many users.  A GitHub app is a valid alternative if you need higher limits.
+### Create workshop repos
 
 ```bash
 npm start
 ```
 
-Or directly with Node.js:
+The release tarball is downloaded automatically from GitHub releases on first run. If it already exists locally, the download is skipped.
+
+### Validate configuration
 
 ```bash
-node setup-repos.js
+npm run validate
 ```
 
-> At a scale of 100-150 attendees, the script is optimized to run in about 15-20 minutes by processing multiple attendees and repositories concurrently while respecting GitHub's rate limits.
+### Clean up repos after workshop
 
-### Repository Cleanup
-
-⚠️ **WARNING: Cleanup will permanently delete repositories and cannot be undone!**
-
-#### Dry Run (Recommended First)
-Preview what repositories will be deleted without actually deleting them:
+Preview what will be deleted (recommended first):
 
 ```bash
 npm run cleanup:dry-run
 ```
 
-#### Actual Cleanup
-Delete all workshop repositories:
+Delete all workshop repos (requires typing "DELETE" to confirm):
 
 ```bash
 npm run cleanup
 ```
 
-Or with alternative commands:
+## Configuration
 
-```bash
-# Using the cleanup script directly
-node cleanup-repos.js
+Set these in your `.env` file:
 
-# Using the main script with cleanup flag
-node setup-repos.js --cleanup
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `GITHUB_TOKEN` | Yes | -- | Personal access token |
+| `TARGET_ORG` | Yes | -- | GitHub org for workshop repos |
+| `CSV_FILE` | No | `attendees.csv` | Path to attendee CSV |
+| `RELEASE_TARBALL` | No | `./release.tar.gz` | Path to release tarball (auto-downloaded if missing) |
+| `RELEASE_OWNER` | No | -- | GitHub owner for auto-download source |
+| `RELEASE_REPO` | No | -- | GitHub repo for auto-download source |
+| `RELEASE_TAG` | No | -- | Release tag for auto-download source |
+| `CUSTOMER_NAME` | No | `Copilot` | Customer name rendered into workshop content |
+| `WORKSHOP_DURATION` | No | `Full Day (8 hours)` | Duration rendered into workshop content |
+| `BACKEND` | No | `nodejs` | Backend language for workshop content |
+| `ENABLE_CODESPACES_PREBUILDS` | No | `true` | Enable Codespaces prebuilds |
+| `CONCURRENT_ATTENDEES` | No | `5` | Attendees processed in parallel |
+| `CONCURRENT_REPOS` | No | `3` | Repos per attendee processed in parallel |
+
+## Attendee CSV Format
+
+```csv
+github_username,email
+octocat,octocat@github.com
 ```
 
-### What the Cleanup Script Does
+`github_username` is required. `email` is optional and for your records only.
 
-The cleanup process will:
+## Maintainer: Preparing a Release
 
-1. 🔍 Scan the target organization for repositories matching the pattern `{source-repo}-{github-username}`
-2. 📋 Display a list of repositories that will be deleted with their details
-3. ⚠️ Require explicit confirmation (you must type "DELETE" to proceed)
-4. 🗑️ Delete each repository permanently
-5. 📊 Provide a detailed summary of the cleanup results
+1. Place the source `release.tar.gz` in the repo root.
+2. Run the preparation script:
 
-### What the Setup Script Does
+   ```bash
+   npm run prepare-release
+   ```
 
-For each attendee, the script will:
-
-1. 🔍 Check if repository `{source-repo}-{github-username}` already exists
-2. 📦 Create a new empty repository in the target organization with **internal visibility**
-3. 🔄 Clone all content, branches, and commit history from the source repository using efficient git commands
-4. 🌿 Push only the required branches (`main`, `feature-add-tos-download`, `feature-add-cart-page`)
-5. 👤 Add the attendee as an admin collaborator
-6. 🚀 **Setup and trigger Codespaces prebuilds for fast environment startup**
-7. ✅ Report success or ❌ log any errors
-
-### Example Output
-
-```
-🎯 Workshop Repository Setup Starting...
-
-🔍 Validating configuration...
-✅ Source repository validated
-✅ Target organization validated
-📖 Loading attendees from attendees.csv...
-✅ Loaded 5 attendees
-
-📊 Progress: 1/5
-
-🚀 Setting up repository for johndoe...
-📦 Creating duplicate repository your-target-org/workshop-demo-johndoe...
-✅ Created empty repository: your-target-org/workshop-demo-johndoe
-🔄 Cloning content from your-source-org/workshop-demo...
-📋 Cloning 3 required branches: main, feature-add-tos-download, feature-add-cart-page
-🌿 Cloning branch: main (first branch)...
-  📄 Processing 25 files...
-  🔄 Processing files 1-20...
-  🔄 Processing files 21-25...
-  ✅ Successfully processed 25 files
-  ✅ Cloned branch: main (25 files)
-🌿 Cloning branch: feature-add-tos-download...
-  📄 Processing 26 files...
-  ✅ Successfully processed 26 files
-  ✅ Cloned branch: feature-add-tos-download (26 files)
-🌿 Cloning branch: feature-add-cart-page...
-  📄 Processing 28 files...
-  ✅ Successfully processed 28 files
-  ✅ Cloned branch: feature-add-cart-page (28 files)
-👤 Adding johndoe as owner of workshop-demo-johndoe...
-✅ Added johndoe as admin collaborator
-🚀 Setting up Codespaces prebuilds for workshop-demo-johndoe...
-  ✅ Found .devcontainer configuration
-  🔧 Enabling Codespaces for repository...
-  ✅ Codespaces enabled for repository
-  🏗️ Creating prebuild configuration for branch: main
-  ✅ Prebuild configuration created for main (ID: 12345)
-  ℹ️ Prebuild will only trigger on devcontainer configuration changes
-  🔍 Checking for existing prebuild configurations...
-  ✅ Found 1 prebuild configuration(s)
-  ℹ️ Initial prebuild will be triggered automatically when devcontainer config is detected
-  ⚡ Triggering initial prebuild for new repository...
-  🚀 Initial prebuild triggered (will complete in background)
-  ✅ Codespaces setup completed for workshop-demo-johndoe
-✅ Successfully set up repository: your-target-org/workshop-demo-johndoe
-```
-
-## Output Files
-
-The scripts generate:
-
-1. **Console output**: Real-time progress and status updates
-2. **Setup Results**: `setup-results-YYYY-MM-DD.json` with detailed results including:
-   - Successfully created repositories with URLs
-   - Skipped repositories (if they already existed)
-   - Failed repositories with error details
-3. **Cleanup Results**: `cleanup-results-YYYY-MM-DD.json` with detailed cleanup results including:
-   - Successfully deleted repositories
-   - Repositories not found (may have been already deleted)
-   - Failed deletions with error details
-
-## Troubleshooting
-
-### Common Issues
-
-**Authentication Error**
-```
-Error: Bad credentials
-```
-- Verify your `GITHUB_TOKEN` is correct and has the required permissions
-
-**Repository Not Found**
-```
-Source repository not found or not accessible
-```
-- Check that `SOURCE_ORG` and `SOURCE_REPO` are correct
-- Ensure your token has access to the source repository
-
-**Organization Access Error**
-```
-Target organization not found or not accessible
-```
-- Verify `TARGET_ORG` is correct
-- Ensure you have admin access to the target organization
-
-**Rate Limiting**
-```
-API rate limit exceeded
-```
-- The script includes delays between operations to minimize rate limiting
-- If you hit limits, wait and re-run the script (it will skip existing repositories)
-
-### CSV Format Issues
-
-Ensure your CSV file:
-- Has a header row with `github_username` column
-- Contains valid GitHub usernames
-- Uses UTF-8 encoding
-- Has no empty rows
-
-## Advanced Configuration
-
-You can override environment variables when running the script:
-
-```bash
-SOURCE_ORG=different-org TARGET_ORG=other-org npm start
-```
-
-Or modify the configuration object in `setup-repos.js` for more permanent changes.
-
-## GitHub Codespaces Prebuild Configuration
-
-The script automatically configures Codespaces prebuilds with the following optimized settings:
-
-- **Branch Target**: Only the `main` branch (not feature branches)
-- **Trigger Policy**: Only rebuilds when devcontainer configuration changes
-- **No Automatic Rebuilds**: Prevents unnecessary rebuilds on every code push
-- **Efficient Resource Usage**: Reduces compute costs by building only when needed
-
-### Prebuild Triggers
-
-Prebuilds will **only** be triggered when:
-- ✅ Devcontainer configuration files change (`.devcontainer/devcontainer.json`, `.devcontainer/Dockerfile`, etc.)
-- ✅ Initial setup of a new repository (one-time trigger)
-
-Prebuilds will **NOT** be triggered on:
-- ❌ Regular code commits and pushes
-- ❌ Pull request creation or updates
-- ❌ Changes to non-devcontainer files
-- ❌ Repos other than octocatSupply
-
-## Security Notes
-
-- Keep your GitHub token secure and never commit it to version control
-- The `.env` file is already in `.gitignore`
-- Attendees will receive admin access to their duplicate repositories
-- Consider the implications of duplicating private repositories (all content will be copied)
-- Workshop attendees will NOT see any connection to the original repository (unlike forks)
-
-## Support
-
-If you encounter issues:
-
-1. Check the troubleshooting section above
-2. Review the generated JSON results file for detailed error information
-3. Verify your GitHub token permissions
-4. Ensure all repository and organization names are correct
-
-## Script Architecture
-
-The script is built using:
-- **@octokit/rest**: Official GitHub REST API client
-- **csv-parser**: For reading attendee CSV files
-- **dotenv**: For environment variable management
-
-The main class `WorkshopRepoSetup` handles:
-- Configuration validation
-- CSV parsing
-- Repository operations (fork, branch creation, collaborator management)
-- Error handling and reporting
-
-## Preparing release tarball
-
-To prepare a release tarball, grab the latest Octocat Supply release.tar.gz.  Then run this release preparation script:
-
-```bash
-node prepare-release.js
-```
-
-Afterwards, upload the generated `workshop-release.tar.gz` to the release assets of this repository for use by the setup script.
+3. Upload the generated `workshop-release.tar.gz` to this repository's GitHub releases.

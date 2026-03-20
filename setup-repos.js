@@ -5,6 +5,7 @@ require('dotenv').config();
 const { Octokit } = require('@octokit/rest');
 const fs = require('fs');
 const fsPromises = require('fs').promises;
+const https = require('https');
 const csv = require('csv-parser');
 const path = require('path');
 const tar = require('tar');
@@ -40,6 +41,80 @@ const CONFIG = {
 const octokit = new Octokit({
   auth: CONFIG.githubToken,
 });
+
+// Download release.tar.gz from GitHub releases if not present locally
+async function downloadReleaseAsset(octokit, owner, repo, tag, destPath) {
+  let release;
+  if (tag === 'latest') {
+    const { data } = await octokit.repos.getLatestRelease({ owner, repo });
+    release = data;
+  } else {
+    const { data } = await octokit.repos.getReleaseByTag({ owner, repo, tag });
+    release = data;
+  }
+
+  const asset = release.assets.find(a => a.name === 'release.tar.gz');
+  if (!asset) {
+    throw new Error(`No release.tar.gz asset found in release ${release.tag_name}`);
+  }
+
+  console.log(`Downloading release.tar.gz from ${owner}/${repo} (${release.tag_name})...`);
+  console.log(`Asset size: ${(asset.size / 1024 / 1024).toFixed(1)} MB`);
+
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(destPath);
+    const reqOptions = {
+      headers: {
+        'User-Agent': 'demo-setup-scripts',
+        'Authorization': `token ${process.env.GITHUB_TOKEN}`,
+        'Accept': 'application/octet-stream'
+      }
+    };
+
+    function download(urlStr) {
+      const mod = urlStr.startsWith('https') ? https : require('http');
+      mod.get(urlStr, reqOptions, (response) => {
+        if (response.statusCode === 301 || response.statusCode === 302) {
+          download(response.headers.location);
+          return;
+        }
+        if (response.statusCode !== 200) {
+          file.close();
+          fs.unlink(destPath, () => {});
+          reject(new Error(`Download failed with status ${response.statusCode}`));
+          return;
+        }
+
+        let downloaded = 0;
+        const totalSize = parseInt(response.headers['content-length'] || asset.size, 10);
+
+        response.on('data', (chunk) => {
+          downloaded += chunk.length;
+          const pct = ((downloaded / totalSize) * 100).toFixed(0);
+          process.stdout.write(`\rDownloading... ${pct}% (${(downloaded / 1024 / 1024).toFixed(1)} MB)`);
+        });
+
+        response.pipe(file);
+
+        file.on('finish', () => {
+          file.close();
+          console.log(`\nDownload complete: ${destPath} (${(downloaded / 1024 / 1024).toFixed(1)} MB)`);
+          resolve();
+        });
+
+        file.on('error', (err) => {
+          fs.unlink(destPath, () => {});
+          reject(err);
+        });
+      }).on('error', (err) => {
+        fs.unlink(destPath, () => {});
+        reject(err);
+      });
+    }
+
+    download(`https://api.github.com/repos/${owner}/${repo}/releases/assets/${asset.id}`);
+  });
+}
 
 // Set up log file streaming — all console output goes to both stdout and a log file
 const LOG_FILE = process.env.LOG_FILE || `setup-repos-${new Date().toISOString().slice(0, 10)}.log`;
@@ -173,9 +248,13 @@ class WorkshopRepoSetup {
       throw new Error(`CSV file not found: ${CONFIG.csvFile}`);
     }
 
-    // Validate release tarball exists
+    // Auto-download release tarball if not present
     if (!fs.existsSync(CONFIG.releaseTarball)) {
-      throw new Error(`Release tarball not found: ${CONFIG.releaseTarball}`);
+      console.log(`\nRelease tarball not found at ${CONFIG.releaseTarball}, downloading from GitHub releases...`);
+      const releaseOwner = process.env.RELEASE_OWNER || 'cheeragpatel';
+      const releaseRepo = process.env.RELEASE_REPO || 'demo_setup_scripts';
+      const releaseTag = process.env.RELEASE_TAG || 'latest';
+      await downloadReleaseAsset(octokit, releaseOwner, releaseRepo, releaseTag, CONFIG.releaseTarball);
     }
     console.log('✅ Release tarball found');
 
