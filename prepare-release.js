@@ -191,7 +191,7 @@ class ReleasePreparer {
       file: CONFIG.inputTarball,
       cwd: this.extractDir,
       // Skip macOS AppleDouble resource fork files (._*) baked into tarballs
-      filter: (p) => !p.replace(/^\.\//, '').split('/').filter(Boolean).some(part => part.startsWith('._'))
+      filter: (p) => !p.replace(/^\.[\\/]/, '').split(/[\\/]/).filter(Boolean).some(part => part.startsWith('._'))
     });
     
     console.log('✅ Extracted successfully\n');
@@ -366,7 +366,7 @@ class ReleasePreparer {
         file: CONFIG.outputTarball,
         cwd: this.extractDir,
         // Exclude macOS AppleDouble resource fork files (._*)
-        filter: (p) => !p.replace(/^\.\//, '').split('/').filter(Boolean).some(part => part.startsWith('._'))
+        filter: (p) => !p.replace(/^\.[\\/]/, '').split(/[\\/]/).filter(Boolean).some(part => part.startsWith('._'))
       },
       files
     );

@@ -8,6 +8,7 @@ const fsPromises = require('fs').promises;
 const https = require('https');
 const csv = require('csv-parser');
 const path = require('path');
+const os = require('os');
 const tar = require('tar');
 const { Liquid } = require('liquidjs');
 
@@ -126,7 +127,8 @@ const timestamp = () => new Date().toISOString().slice(11, 19);
 console.log = (...args) => { const line = args.join(' '); origLog(line); logStream.write(`[${timestamp()}] ${line}\n`); };
 console.warn = (...args) => { const line = args.join(' '); origWarn(line); logStream.write(`[${timestamp()}] WARN: ${line}\n`); };
 console.error = (...args) => { const line = args.join(' '); origErr(line); logStream.write(`[${timestamp()}] ERROR: ${line}\n`); };
-console.log(`📝 Logging to ${LOG_FILE} — tail -f ${LOG_FILE} to follow progress`);
+const followCmd = process.platform === 'win32' ? `Get-Content -Wait ${LOG_FILE}` : `tail -f ${LOG_FILE}`;
+console.log(`📝 Logging to ${LOG_FILE} — ${followCmd} to follow progress`);
 
 class WorkshopRepoSetup {
   constructor() {
@@ -283,7 +285,7 @@ class WorkshopRepoSetup {
       file: CONFIG.releaseTarball,
       cwd: extractDir,
       // Skip macOS AppleDouble resource fork files (._*) baked into tarballs
-      filter: (p) => !p.replace(/^\.\//, '').split('/').filter(Boolean).some(part => part.startsWith('._'))
+      filter: (p) => !p.replace(/^\.[\\/]/, '').split(/[\\/]/).filter(Boolean).some(part => part.startsWith('._'))
     });
     
     console.log('✅ Release extracted');
@@ -519,7 +521,7 @@ class WorkshopRepoSetup {
       const { exec } = require('child_process');
       const { promisify } = require('util');
       const execAsync = promisify(exec);
-      const { stdout } = await execAsync(`git ls-remote --heads "${url}" 2>/dev/null`, { timeout: 15000 });
+      const { stdout } = await execAsync(`git ls-remote --heads "${url}"`, { timeout: 15000 });
       return stdout.trim().length > 0 ? 'populated' : 'empty';
     } catch {
       return 'missing';
@@ -578,7 +580,7 @@ class WorkshopRepoSetup {
       throw new Error(`Source path not found: ${sourcePath}`);
     }
     
-    const tempDir = `/tmp/workshop-populate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const tempDir = path.join(os.tmpdir(), `workshop-populate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     
     try {
       // Initialize git repository first
@@ -790,11 +792,7 @@ class WorkshopRepoSetup {
   }
 
   async copyDirectory(source, destination) {
-    const { exec } = require('child_process');
-    const { promisify } = require('util');
-    const execAsync = promisify(exec);
-    
-    await execAsync(`COPYFILE_DISABLE=1 cp -R "${source}"/. "${destination}"`);
+    await fsPromises.cp(source, destination, { recursive: true });
   }
 
   async renderTemplates(templatedFiles, workingDir, context) {
@@ -897,7 +895,7 @@ class WorkshopRepoSetup {
   async cloneRepositoryWithGit(newRepoName, targetCloneUrl) {
     console.log(`🔄 Cloning repository content using git commands...`);
     
-    const tempDir = `/tmp/workshop-clone-${Date.now()}`;
+    const tempDir = path.join(os.tmpdir(), `workshop-clone-${Date.now()}`);
     const sourceUrl = `https://github.com/${CONFIG.sourceOrg}/${CONFIG.sourceRepo}.git`;
     
     try {
@@ -987,7 +985,9 @@ class WorkshopRepoSetup {
 
   async safeCleanup(dirPath) {
     // Safety check: only allow cleanup of temp directories
-    if (!dirPath.startsWith('/tmp/') && !dirPath.startsWith('./temp-')) {
+    const normalizedPath = path.resolve(dirPath);
+    const normalizedTmp = path.resolve(os.tmpdir());
+    if (!normalizedPath.startsWith(normalizedTmp) && !dirPath.startsWith('./temp-')) {
       console.warn(`  ⚠️ Refusing to delete path outside of safe temp directories: ${dirPath}`);
       return;
     }
