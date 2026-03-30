@@ -281,7 +281,9 @@ class WorkshopRepoSetup {
     
     await tar.extract({
       file: CONFIG.releaseTarball,
-      cwd: extractDir
+      cwd: extractDir,
+      // Skip macOS AppleDouble resource fork files (._*) baked into tarballs
+      filter: (p) => !p.replace(/^\.\//, '').split('/').filter(Boolean).some(part => part.startsWith('._'))
     });
     
     console.log('✅ Release extracted');
@@ -792,7 +794,7 @@ class WorkshopRepoSetup {
     const { promisify } = require('util');
     const execAsync = promisify(exec);
     
-    await execAsync(`cp -R "${source}"/. "${destination}"`);
+    await execAsync(`COPYFILE_DISABLE=1 cp -R "${source}"/. "${destination}"`);
   }
 
   async renderTemplates(templatedFiles, workingDir, context) {
