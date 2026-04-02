@@ -27,6 +27,16 @@ const CONFIG = {
   numberOfParticipants: process.env.NUMBER_OF_PARTICIPANTS || '',
   additionalNotes: process.env.ADDITIONAL_NOTES || '',
   backend: process.env.BACKEND || 'nodejs',
+
+  // Paths to exclude (remove) when pruning repo content.
+  // Supports both directory names (e.g. 'api-python') and
+  // file paths relative to the repo root (e.g. 'api-nodejs/ca.key').
+  excludedPaths: [
+    'api-python',
+    'api-java',
+    'api-nodejs/ca.key',
+    'api-nodejs/.env.example'
+  ],
   
   // Performance & Rate Limiting
   concurrentAttendees: parseInt(process.env.CONCURRENT_ATTENDEES || '5'), // Process N attendees at once
@@ -642,6 +652,7 @@ class WorkshopRepoSetup {
       await this.runGitCommand('git branch -M main', tempDir);
       
       // Process additional branches
+      const createdBranches = [];
       for (const branchDir of branches) {
         if (branchDir === mainBranchDir) continue; // Skip main branch
         
@@ -677,6 +688,8 @@ class WorkshopRepoSetup {
         // Commit branch content
         await this.runGitCommand('git add -A', tempDir);
         await this.runGitCommand(`git commit -m "Content for ${branchName} branch" --allow-empty`, tempDir);
+        
+        createdBranches.push(branchName);
       }
       
       // Push all branches — push main first so GitHub sets it as default
@@ -685,6 +698,11 @@ class WorkshopRepoSetup {
       await this.runGitCommand('git checkout main', tempDir);
       await this.runGitCommand('git push -u origin main', tempDir);
       await this.runGitCommand('git push -u origin --all', tempDir);
+
+      // Open a pull request for each non-main branch
+      if (createdBranches.length > 0) {
+        await this.createPullRequestsForBranches(newRepoName, createdBranches);
+      }
       
       console.log(`  ✅ Successfully populated repository from ${repoConfig.contentType}`);
       
@@ -698,21 +716,30 @@ class WorkshopRepoSetup {
   }
 
   /**
-   * Remove unwanted directories and rename api-nodejs to api.
-   * Keeps only the configured backend (default: nodejs) and removes demo/.
+   * Remove unwanted directories/files and rename api-<backend> to api/.
+   * Paths listed in CONFIG.excludedPaths are deleted before the rename so
+   * relative paths like 'api-nodejs/ca.key' resolve correctly.
+   * The demo/resources folder is preserved; all other demo/ content is removed.
    */
   async pruneContent(tempDir) {
-    const { exec } = require('child_process');
-    const { promisify } = require('util');
-    const execAsync = promisify(exec);
-
     const backend = CONFIG.backend || 'nodejs';
     const apiSource = path.join(tempDir, `api-${backend}`);
     const apiTarget = path.join(tempDir, 'api');
-    const removeDirs = ['demo', 'api-java', 'api-nodejs', 'api-python', 'api-dotnet']
-      .filter(d => d !== `api-${backend}`);
 
-    // Rename api-<backend> to api (if it exists and api/ doesn't already)
+    // Step 1: Remove excluded paths (files and directories)
+    for (const excluded of CONFIG.excludedPaths) {
+      const fullPath = path.join(tempDir, excluded);
+      try {
+        await fsPromises.rm(fullPath, { recursive: true, force: true });
+        console.log(`  🗑️  Removed excluded path: ${excluded}`);
+      } catch (err) {
+        if (err.code !== 'ENOENT') {
+          console.warn(`  ⚠️  Could not remove ${excluded}: ${err.message}`);
+        }
+      }
+    }
+
+    // Step 2: Rename api-<backend> to api/ (if it exists and api/ doesn't already)
     try {
       await fsPromises.access(apiSource);
       try { await fsPromises.access(apiTarget); } catch {
@@ -721,13 +748,67 @@ class WorkshopRepoSetup {
       }
     } catch { /* api-<backend> doesn't exist in this content, skip */ }
 
-    // Remove unwanted directories
-    for (const dir of removeDirs) {
-      const dirPath = path.join(tempDir, dir);
+    // Step 3: Preserve demo/resources — remove all other content inside demo/
+    const demoDir = path.join(tempDir, 'demo');
+    try {
+      await fsPromises.access(demoDir);
+      const demoEntries = await fsPromises.readdir(demoDir, { withFileTypes: true });
+      for (const entry of demoEntries) {
+        if (entry.name === 'resources') continue;
+        await fsPromises.rm(path.join(demoDir, entry.name), { recursive: true, force: true });
+      }
+      console.log(`  📁 Preserved demo/resources/`);
+    } catch { /* demo/ doesn't exist, skip */ }
+
+    // Step 4: Keep only the api-endpoint-<backend> skill; remove all other api-endpoint-* variants
+    const skillsDir = path.join(tempDir, '.github', 'skills');
+    try {
+      await fsPromises.access(skillsDir);
+      const skillEntries = await fsPromises.readdir(skillsDir, { withFileTypes: true });
+      for (const entry of skillEntries) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name.startsWith('api-endpoint-') && entry.name !== `api-endpoint-${backend}`) {
+          await fsPromises.rm(path.join(skillsDir, entry.name), { recursive: true, force: true });
+          console.log(`  🗑️  Removed skill variant: .github/skills/${entry.name}`);
+        }
+      }
+    } catch { /* .github/skills/ doesn't exist, skip */ }
+  }
+
+  /**
+   * Create a pull request for each branch in `branchNames`, targeting `main`.
+   * The PR title is derived from the branch name (hyphens → spaces, title-cased).
+   */
+  async createPullRequestsForBranches(repoName, branchNames) {
+    console.log(`  🔀 Creating ${branchNames.length} pull request(s) for ${repoName}...`);
+
+    for (const branch of branchNames) {
+      // Convert branch name to a readable PR title, e.g. "feature-add-cart-page" → "Feature Add Cart Page"
+      const title = branch
+        .replace(/[-_]/g, ' ')
+        .replace(/\b\w/g, c => c.toUpperCase());
+
       try {
-        await fsPromises.access(dirPath);
-        await fsPromises.rm(dirPath, { recursive: true, force: true });
-      } catch { /* doesn't exist, skip */ }
+        this.apiCallCount++;
+        await this.waitIfNeeded();
+
+        const pr = await this.retryOperation(
+          () => octokit.rest.pulls.create({
+            owner: CONFIG.targetOrg,
+            repo: repoName,
+            title,
+            head: branch,
+            base: 'main',
+            body: `This pull request contains the content for the \`${branch}\` branch.`
+          }),
+          `create PR for ${branch}`
+        );
+
+        console.log(`    ✅ Created PR #${pr.data.number}: "${title}" (${branch} → main)`);
+        await this.sleep(500);
+      } catch (error) {
+        console.error(`    ❌ Failed to create PR for ${branch}: ${error.message}`);
+      }
     }
   }
 
