@@ -28,15 +28,8 @@ const CONFIG = {
   additionalNotes: process.env.ADDITIONAL_NOTES || '',
   backend: process.env.BACKEND || 'nodejs',
 
-  // Paths to exclude (remove) when pruning repo content.
-  // Supports both directory names (e.g. 'api-python') and
-  // file paths relative to the repo root (e.g. 'api-nodejs/ca.key').
-  excludedPaths: [
-    'api-python',
-    'api-java',
-    'api-nodejs/ca.key',
-    'api-nodejs/.env.example'
-  ],
+  // Paths to exclude before backend promotion.
+  excludedPaths: [],
   
   // Performance & Rate Limiting
   concurrentAttendees: parseInt(process.env.CONCURRENT_ATTENDEES || '5'), // Process N attendees at once
@@ -53,7 +46,7 @@ const octokit = new Octokit({
   auth: CONFIG.githubToken,
 });
 
-// Download release.tar.gz from GitHub releases if not present locally
+// Download the configured release asset if it is not present locally.
 async function downloadReleaseAsset(octokit, owner, repo, tag, destPath) {
   let release;
   if (tag === 'latest') {
@@ -64,13 +57,16 @@ async function downloadReleaseAsset(octokit, owner, repo, tag, destPath) {
     release = data;
   }
 
-  const asset = release.assets.find(a => a.name === 'release.tar.gz');
+  const assetName = process.env.RELEASE_ASSET_NAME || path.basename(destPath);
+  const asset = release.assets.find(a => a.name === assetName);
   if (!asset) {
-    throw new Error(`No release.tar.gz asset found in release ${release.tag_name}`);
+    throw new Error(`No ${assetName} asset found in release ${release.tag_name}`);
   }
 
-  console.log(`Downloading release.tar.gz from ${owner}/${repo} (${release.tag_name})...`);
+  console.log(`Downloading ${assetName} from ${owner}/${repo} (${release.tag_name})...`);
   console.log(`Asset size: ${(asset.size / 1024 / 1024).toFixed(1)} MB`);
+
+  await fsPromises.mkdir(path.dirname(destPath), { recursive: true });
 
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(destPath);
@@ -363,21 +359,35 @@ class WorkshopRepoSetup {
 
     const issues = [];
     
-    // Determine backend type from metadata
-    const backend = this.metadata?.templateMainBranch || 'nodejs';
+    const backend = CONFIG.backend;
     
     try {
       // Load the main issues (these are hardcoded in the blueprint)
       const legalDownloadPath = path.join(issueContentPath, 'legal-download-issue.md');
       const unittestPath = path.join(issueContentPath, `unittest-issue-${backend}.md`);
       
-      let legalDownloadBody = '';
+      let legalDownloadBody = `# Feature Summary
+
+Implement a new feature that allows users to download the Terms of Service from the application.
+
+## Key Functionalities
+
+- **Download Terms**: Users should be able to download the Terms of Service through the footer link.
+- **Multi-language Support**: Documents should be available in multiple languages.
+- **Bot and Crawler Protection**: Protect the download endpoint from abusive automated traffic.
+
+## Acceptance Criteria
+
+- Users can access and download the Terms of Service.
+- Downloads are available in several major languages.
+- The endpoint uses filtering and rate limiting to protect against non-human traffic.
+- All changes are documented and tested.`;
       let unittestBody = '';
       
       try {
         legalDownloadBody = await fsPromises.readFile(legalDownloadPath, 'utf-8');
       } catch (error) {
-        console.log('  ⚠️  legal-download-issue.md not found');
+        console.log('  ℹ️  Using embedded legal download issue blueprint');
       }
       
       try {
@@ -727,7 +737,12 @@ class WorkshopRepoSetup {
     const apiTarget = path.join(tempDir, 'api');
 
     // Step 1: Remove excluded paths (files and directories)
-    for (const excluded of CONFIG.excludedPaths) {
+    const excludedPaths = [
+      ...CONFIG.excludedPaths,
+      `api-${backend}/ca.key`,
+      `api-${backend}/.env.example`
+    ];
+    for (const excluded of excludedPaths) {
       const fullPath = path.join(tempDir, excluded);
       try {
         await fsPromises.rm(fullPath, { recursive: true, force: true });
@@ -739,16 +754,51 @@ class WorkshopRepoSetup {
       }
     }
 
-    // Step 2: Rename api-<backend> to api/ (if it exists and api/ doesn't already)
+    // Step 2: Remove unselected backends and promote api-<backend> to api/.
+    const rootEntries = await fsPromises.readdir(tempDir, { withFileTypes: true });
+    const backendDirs = rootEntries.filter(
+      entry => entry.isDirectory() && entry.name.startsWith('api-')
+    );
+    for (const entry of backendDirs) {
+      if (entry.name !== `api-${backend}`) {
+        await fsPromises.rm(path.join(tempDir, entry.name), { recursive: true, force: true });
+        console.log(`  🗑️  Removed backend variant: ${entry.name}`);
+      }
+    }
+
     try {
       await fsPromises.access(apiSource);
-      try { await fsPromises.access(apiTarget); } catch {
-        await fsPromises.rename(apiSource, apiTarget);
-        console.log(`  🔧 Renamed api-${backend}/ → api/`);
-      }
-    } catch { /* api-<backend> doesn't exist in this content, skip */ }
+      await fsPromises.rm(apiTarget, { recursive: true, force: true });
+      await fsPromises.rename(apiSource, apiTarget);
+      console.log(`  🔧 Renamed api-${backend}/ → api/`);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      await fsPromises.access(apiTarget);
+      console.log(`  ✅ Backend already promoted: api/`);
+    }
 
-    // Step 3: Preserve demo/resources — remove all other content inside demo/
+    // Step 3: Promote the selected CI workflow and remove other variants.
+    const workflowsDir = path.join(tempDir, '.github', 'workflows');
+    try {
+      const workflowEntries = await fsPromises.readdir(workflowsDir, { withFileTypes: true });
+      const selectedWorkflow = `ci-${backend}.yml`;
+      for (const entry of workflowEntries) {
+        if (!entry.isFile() || !/^ci-.+\.yml$/.test(entry.name)) continue;
+        const workflowPath = path.join(workflowsDir, entry.name);
+        if (entry.name === selectedWorkflow) {
+          await fsPromises.rm(path.join(workflowsDir, 'ci.yml'), { force: true });
+          await fsPromises.rename(workflowPath, path.join(workflowsDir, 'ci.yml'));
+          console.log(`  🔧 Renamed ${selectedWorkflow} → ci.yml`);
+        } else {
+          await fsPromises.rm(workflowPath, { force: true });
+          console.log(`  🗑️  Removed workflow variant: ${entry.name}`);
+        }
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+
+    // Step 4: Preserve demo/resources — remove all other content inside demo/
     const demoDir = path.join(tempDir, 'demo');
     try {
       await fsPromises.access(demoDir);
@@ -760,15 +810,22 @@ class WorkshopRepoSetup {
       console.log(`  📁 Preserved demo/resources/`);
     } catch { /* demo/ doesn't exist, skip */ }
 
-    // Step 4: Keep only the api-endpoint-<backend> skill; remove all other api-endpoint-* variants
+    // Step 5: Promote the selected API skill and remove other variants.
     const skillsDir = path.join(tempDir, '.github', 'skills');
     try {
       await fsPromises.access(skillsDir);
       const skillEntries = await fsPromises.readdir(skillsDir, { withFileTypes: true });
       for (const entry of skillEntries) {
         if (!entry.isDirectory()) continue;
-        if (entry.name.startsWith('api-endpoint-') && entry.name !== `api-endpoint-${backend}`) {
-          await fsPromises.rm(path.join(skillsDir, entry.name), { recursive: true, force: true });
+        if (!entry.name.startsWith('api-endpoint-')) continue;
+        const skillPath = path.join(skillsDir, entry.name);
+        if (entry.name === `api-endpoint-${backend}`) {
+          const targetPath = path.join(skillsDir, 'api-endpoint');
+          await fsPromises.rm(targetPath, { recursive: true, force: true });
+          await fsPromises.rename(skillPath, targetPath);
+          console.log(`  🔧 Renamed .github/skills/${entry.name} → .github/skills/api-endpoint`);
+        } else {
+          await fsPromises.rm(skillPath, { recursive: true, force: true });
           console.log(`  🗑️  Removed skill variant: .github/skills/${entry.name}`);
         }
       }
@@ -925,7 +982,7 @@ class WorkshopRepoSetup {
    * and render them through the Liquid template engine.
    */
   async renderDetectedTemplates(workingDir, context) {
-    const TEMPLATE_EXTENSIONS = ['.md', '.yml', '.yaml', '.json', '.txt', '.env', '.html'];
+    const TEMPLATE_EXTENSIONS = ['.md', '.yml', '.yaml', '.json', '.txt', '.env', '.html', '.liquid'];
     const TEMPLATE_MARKER = /<%|<\$/;
 
     const engine = new Liquid({
@@ -965,8 +1022,12 @@ class WorkshopRepoSetup {
       const relPath = path.relative(workingDir, fullPath);
       try {
         const rendered = await engine.parseAndRender(content, context);
-        await fsPromises.writeFile(fullPath, rendered, 'utf-8');
-        console.log(`    ✅ Rendered: ${relPath}`);
+        const outputPath = fullPath.endsWith('.liquid') ? fullPath.slice(0, -'.liquid'.length) : fullPath;
+        await fsPromises.writeFile(outputPath, rendered, 'utf-8');
+        if (outputPath !== fullPath) {
+          await fsPromises.rm(fullPath);
+        }
+        console.log(`    ✅ Rendered: ${path.relative(workingDir, outputPath)}`);
       } catch (error) {
         console.warn(`    ⚠️  Template render failed for ${relPath}: ${error.message}`);
       }
@@ -1299,7 +1360,7 @@ class WorkshopRepoSetup {
   }
 
   async run() {
-    console.log('🎯 Workshop Repository Setup Starting (from release.tar.gz)...\n');
+    console.log(`🎯 Workshop Repository Setup Starting (from ${path.basename(CONFIG.releaseTarball)})...\n`);
     
     try {
       // Validate configuration
