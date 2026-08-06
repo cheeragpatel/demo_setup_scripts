@@ -9,6 +9,7 @@ yarn-error.log*
 
 # Release files 
 *.tar.gz
+*.tar.gz.sha256
 
 # Temp folders
 temp*/

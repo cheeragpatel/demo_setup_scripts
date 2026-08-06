@@ -4,7 +4,7 @@ Automates creation of personalized GitHub Copilot workshop repositories for each
 
 ## Prerequisites
 
-- Node.js 16+
+- Node.js 18+
 - GitHub Personal Access Token with scopes: `repo`, `admin:org`, `workflow`, `delete_repo`
 - Admin access to a GitHub organization for workshop repos
 
@@ -72,7 +72,8 @@ Set these in your `.env` file:
 | `GITHUB_TOKEN` | Yes | -- | Personal access token |
 | `TARGET_ORG` | Yes | -- | GitHub org for workshop repos |
 | `CSV_FILE` | No | `attendees.csv` | Path to attendee CSV |
-| `RELEASE_TARBALL` | No | `./release.tar.gz` | Path to release tarball (auto-downloaded if missing) |
+| `RELEASE_TARBALL` | No | `./release.tar.gz` | Path to the prepared release tarball (auto-downloaded if missing) |
+| `RELEASE_ASSET_NAME` | No | Basename of `RELEASE_TARBALL` | GitHub release asset name, if it differs from the local filename |
 | `RELEASE_OWNER` | No | -- | GitHub owner for auto-download source |
 | `RELEASE_REPO` | No | -- | GitHub repo for auto-download source |
 | `RELEASE_TAG` | No | -- | Release tag for auto-download source |
@@ -94,11 +95,25 @@ octocat,octocat@github.com
 
 ## Maintainer: Preparing a Release
 
-1. Place the source `release.tar.gz` in the repo root.
+1. Place the source Octodemo archive at `source-release.tar.gz` in the repo root.
 2. Run the preparation script:
 
    ```bash
    npm run prepare-release
    ```
 
-3. Upload the generated `workshop-release.tar.gz` to this repository's GitHub releases.
+   The command validates the archive layout, removes sensitive and unwanted
+   files, applies the workshop replacements, and writes:
+
+   - `release.tar.gz`
+   - `release.tar.gz.sha256`
+
+   Override the paths with `INPUT_RELEASE_TARBALL` and
+   `OUTPUT_RELEASE_TARBALL` when needed. Set `SOURCE_DATE_EPOCH` to preserve a
+   chosen release timestamp; otherwise timestamps are normalized for
+   reproducible output. For a differently structured source package, set
+   `RELEASE_SOURCE_REPO` (default: `octocatSupply`) and the comma-separated
+   `RELEASE_BRANCHES`.
+
+3. Create a GitHub release and upload both generated files. The tarball asset
+   should be named `release.tar.gz`.

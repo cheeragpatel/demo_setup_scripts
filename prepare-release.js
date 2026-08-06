@@ -7,7 +7,19 @@ require('dotenv').config();
 const fs = require('fs');
 const fsPromises = require('fs').promises;
 const path = require('path');
+const crypto = require('crypto');
 const tar = require('tar');
+
+const SOURCE_REPO = process.env.RELEASE_SOURCE_REPO || 'octocatSupply';
+const SOURCE_BRANCHES = (process.env.RELEASE_BRANCHES ||
+  'main,feature-add-cart-page,feature-add-tos-download')
+  .split(',')
+  .map(branch => branch.trim())
+  .filter(Boolean);
+
+function releasePath(branch, relativePath = '') {
+  return path.posix.join('demo-contents', SOURCE_REPO, branch, relativePath);
+}
 
 // ============================================================================
 // CONFIGURATION - Update these variables for your customizations
@@ -15,114 +27,49 @@ const tar = require('tar');
 
 const CONFIG = {
   // Input and output files
-  inputTarball: process.env.INPUT_RELEASE_TARBALL || './release.tar.gz',
-  outputTarball: process.env.OUTPUT_RELEASE_TARBALL || './workshop-release.tar.gz',
+  inputTarball: process.env.INPUT_RELEASE_TARBALL || './source-release.tar.gz',
+  outputTarball: process.env.OUTPUT_RELEASE_TARBALL || './release.tar.gz',
   
   // Working directory for extraction/repackaging
-  workingDir: './temp-prepare-release',
-  
-  // Files/directories to remove (relative to extracted root)
-  filesToRemove: [
-    // Remove all contents from demo directories
-    'demo-contents/octocatSupply/nodejs/demo',
-    'demo-contents/octocatSupply/nodejs-feature-add-cart-page/demo',
-    'demo-contents/octocatSupply/nodejs-feature-add-tos-download/demo',
-    'demo-contents/octocatSupply/nodejs/CONTRIBUTING.md',
-    'demo-contents/octocatSupply/nodejs-feature-add-tos-download/CONTRIBUTING.md',
-    'demo-contents/octocatSupply/nodejs-feature-add-cart-page/CONTRIBUTING.md',
+  workingDir: process.env.PREPARE_RELEASE_WORKING_DIR || './temp-prepare-release',
 
-    // Remove ca.key secret (optional)
-    'demo-contents/octocatSupply/nodejs/api/ca.key',
-    'demo-contents/octocatSupply/nodejs-feature-add-tos-download/ca.key',
-    'demo-contents/octocatSupply/nodejs-feature-add-cart-page/ca.key',
-    // Example: Remove .octodemo directory from all repos
-    // 'demo-contents/octocatSupply/nodejs/.octodemo',
-    // 'demo-contents/octocatSupply/nodejs-feature-add-cart-page/.octodemo',
-    // 'demo-contents/octocatSupply/nodejs-feature-add-tos-download/.octodemo',
-    
-    // Example: Remove internal documentation
-    // 'demo-contents/octocatSupply/nodejs/INTERNAL.md',
-    
-    // Example: Remove specific workflow files
-    // 'demo-contents/octocatSupply/nodejs/.github/workflows/internal-only.yml',
+  requiredPaths: [
+    '.octodemo/metadata.json',
+    ...SOURCE_BRANCHES.map(branch => releasePath(branch))
   ],
   
-  // Files to add or replace (key: destination path, value: source path or content)
-  filesToAddOrReplace: {
-    // Add a workshop-specific README
-    'demo-contents/octocatSupply/nodejs/README.md': {
-      type: 'file',
-      source: './workshop-files/README.md'
-    },
-    'demo-contents/octocatSupply/nodejs-feature-add-cart-page/README.md': {
-      type: 'file',
-      source: './workshop-files/README.md'
-    },
-    'demo-contents/octocatSupply/nodejs-feature-add-tos-download/README.md': {
-      type: 'file',
-      source: './workshop-files/README.md'
-    },
-    'demo-contents/octocatSupply/nodejs/docs/workshop-agent-mode.md': {
-      type: 'file',
-      source: './workshop-files/workshop-agent-mode.md'
-    },
-    'demo-contents/octocatSupply/nodejs-feature-add-cart-page/docs/workshop-agent-mode.md': {
-      type: 'file',
-      source: './workshop-files/workshop-agent-mode.md'
-    },
-    'demo-contents/octocatSupply/nodejs-feature-add-tos-download/docs/workshop-agent-mode.md': {
-      type: 'file',
-      source: './workshop-files/workshop-agent-mode.md'
-    },
-    'demo-contents/octocatSupply/nodejs/docs/workshop-use-case-focused.md': {
-      type: 'file',
-      source: './workshop-files/workshop-use-case-focused.md'
-    },
-    'demo-contents/octocatSupply/nodejs-feature-add-cart-page/docs/workshop-use-case-focused.md': {
-      type: 'file',
-      source: './workshop-files/workshop-use-case-focused.md'
-    },
-    'demo-contents/octocatSupply/nodejs-feature-add-tos-download/docs/workshop-use-case-focused.md': {
-      type: 'file',
-      source: './workshop-files/workshop-use-case-focused.md'
-    },
-    // Replace .env.example with sanitized version to avoid push protection
-    'demo-contents/octocatSupply/nodejs/api/.env.example': {
-      type: 'file',
-      source: './workshop-files/API-.env.example'
-    },
-    'demo-contents/octocatSupply/nodejs-feature-add-cart-page/api/.env.example': {
-      type: 'file',
-      source: './workshop-files/API-.env.example'
-    },
-    'demo-contents/octocatSupply/nodejs-feature-add-tos-download/api/.env.example': {
-      type: 'file',
-      source: './workshop-files/API-.env.example'
-    },
+  // Files/directories to remove (relative to extracted root)
+  filesToRemove: SOURCE_BRANCHES.flatMap(branch => [
+    releasePath(branch, 'CONTRIBUTING.md'),
+    releasePath(branch, 'api-nodejs/ca.key')
+  ]),
 
-    // Example: Add a workshop-specific README
-    // 'demo-contents/octocatSupply/nodejs/WORKSHOP.md': {
-    //   type: 'file',
-    //   source: './workshop-files/WORKSHOP.md'
-    // },
-    
-    // Example: Add content directly
-    // 'demo-contents/octocatSupply/nodejs/GETTING-STARTED.md': {
-    //   type: 'content',
-    //   content: '# Getting Started\n\nWelcome to the workshop!'
-    // },
-    
-    // Example: Replace an existing file
-    // 'demo-contents/octocatSupply/nodejs/README.md': {
-    //   type: 'file',
-    //   source: './workshop-files/README.md'
-    // }
-  },
+  demoDirectories: SOURCE_BRANCHES.map(branch => releasePath(branch, 'demo')),
+  
+  // Files to add or replace (key: destination path, value: source path or content)
+  filesToAddOrReplace: Object.fromEntries(SOURCE_BRANCHES.flatMap(branch => [
+    [
+      releasePath(branch, 'README.md'),
+      { type: 'file', source: './workshop-files/README.md' }
+    ],
+    [
+      releasePath(branch, 'docs/workshop-agent-mode.md'),
+      { type: 'file', source: './workshop-files/workshop-agent-mode.md' }
+    ],
+    [
+      releasePath(branch, 'docs/workshop-use-case-focused.md'),
+      { type: 'file', source: './workshop-files/workshop-use-case-focused.md' }
+    ],
+    [
+      releasePath(branch, 'api-nodejs/.env.example'),
+      { type: 'file', source: './workshop-files/API-.env.example' }
+    ]
+  ])),
   
   // Text replacements to apply to specific files
   textReplacements: {
     // Example: Replace text in README files
-    // 'demo-contents/octocatSupply/nodejs/README.md': [
+    // [releasePath('main', 'README.md')]: [
     //   { find: 'Internal Demo', replace: 'Customer Workshop' },
     //   { find: 'For GitHub SEs only', replace: '' }
     // ]
@@ -142,18 +89,17 @@ class ReleasePreparer {
     console.log('🎯 Preparing Workshop Release Package...\n');
     
     try {
-      // Validate input file exists
-      if (!fs.existsSync(CONFIG.inputTarball)) {
-        throw new Error(`Input tarball not found: ${CONFIG.inputTarball}`);
-      }
+      await this.validateConfiguration();
       console.log(`📦 Input: ${CONFIG.inputTarball}`);
       console.log(`📦 Output: ${CONFIG.outputTarball}\n`);
 
       // Step 1: Extract the original tarball
       await this.extractTarball();
+      await this.validateSourceRelease();
 
       // Step 2: Remove unwanted files/directories
       await this.removeFiles();
+      await this.pruneDemoDirectories();
 
       // Step 3: Add or replace files
       await this.addOrReplaceFiles();
@@ -161,20 +107,39 @@ class ReleasePreparer {
       // Step 4: Apply text replacements
       await this.applyTextReplacements();
 
-      // Step 5: Repackage as new tarball
+      // Step 5: Validate and repackage as new tarball
+      await this.validatePreparedRelease();
       await this.createTarball();
-
-      // Step 6: Cleanup
-      await this.cleanup();
+      await this.createChecksum();
 
       console.log('\n✅ Release package preparation completed successfully!');
       console.log(`📦 Workshop release: ${CONFIG.outputTarball}`);
-
-    } catch (error) {
-      console.error('💥 Preparation failed:', error.message);
-      console.error(error.stack);
-      process.exit(1);
+      console.log(`🔐 SHA-256 checksum: ${CONFIG.outputTarball}.sha256`);
+    } finally {
+      await this.cleanup();
     }
+  }
+
+  async validateConfiguration() {
+    if (!fs.existsSync(CONFIG.inputTarball)) {
+      throw new Error(`Input tarball not found: ${CONFIG.inputTarball}`);
+    }
+
+    if (path.resolve(CONFIG.inputTarball) === path.resolve(CONFIG.outputTarball)) {
+      throw new Error('Input and output tarballs must use different paths');
+    }
+
+    if (SOURCE_BRANCHES.length === 0) {
+      throw new Error('At least one release branch must be configured');
+    }
+
+    for (const config of Object.values(CONFIG.filesToAddOrReplace)) {
+      if (config.type === 'file' && !fs.existsSync(config.source)) {
+        throw new Error(`Replacement source file not found: ${config.source}`);
+      }
+    }
+
+    await fsPromises.mkdir(path.dirname(path.resolve(CONFIG.outputTarball)), { recursive: true });
   }
 
   async extractTarball() {
@@ -195,6 +160,42 @@ class ReleasePreparer {
     });
     
     console.log('✅ Extracted successfully\n');
+  }
+
+  async validateSourceRelease() {
+    const missingPaths = CONFIG.requiredPaths.filter(
+      relativePath => !fs.existsSync(path.join(this.extractDir, relativePath))
+    );
+
+    if (missingPaths.length > 0) {
+      throw new Error(`Source release is missing required paths:\n- ${missingPaths.join('\n- ')}`);
+    }
+
+    const metadataPath = path.join(this.extractDir, '.octodemo', 'metadata.json');
+    let metadata;
+    try {
+      metadata = JSON.parse(await fsPromises.readFile(metadataPath, 'utf8'));
+    } catch (error) {
+      throw new Error(`Source release has invalid .octodemo/metadata.json: ${error.message}`);
+    }
+
+    const repoConfig = metadata.demoContents?.[SOURCE_REPO];
+    if (!repoConfig) {
+      throw new Error(`Source release metadata does not define demoContents.${SOURCE_REPO}`);
+    }
+
+    const metadataBranches = new Set([
+      repoConfig.mainBranch,
+      ...(repoConfig.additionalBranches || [])
+    ]);
+    const unconfiguredBranches = SOURCE_BRANCHES.filter(branch => !metadataBranches.has(branch));
+    if (unconfiguredBranches.length > 0) {
+      throw new Error(
+        `Configured branches are not declared in metadata:\n- ${unconfiguredBranches.join('\n- ')}`
+      );
+    }
+
+    console.log('✅ Source release layout validated\n');
   }
 
   async removeFiles() {
@@ -231,12 +232,38 @@ class ReleasePreparer {
           console.log(`  ⏭️  Not found (skipping): ${filePattern}`);
           notFoundCount++;
         } else {
-          console.error(`  ❌ Failed to remove ${filePattern}: ${error.message}`);
+          throw new Error(`Failed to remove ${filePattern}: ${error.message}`);
         }
       }
     }
     
     console.log(`\n📊 Removal summary: ${removedCount} removed, ${notFoundCount} not found\n`);
+  }
+
+  async pruneDemoDirectories() {
+    console.log('🧹 Pruning demo directories while preserving demo/resources...');
+
+    for (const relativePath of CONFIG.demoDirectories) {
+      const demoDir = path.join(this.extractDir, relativePath);
+      let entries;
+      try {
+        entries = await fsPromises.readdir(demoDir, { withFileTypes: true });
+      } catch (error) {
+        if (error.code === 'ENOENT') {
+          console.log(`  ⏭️  Not found (skipping): ${relativePath}`);
+          continue;
+        }
+        throw new Error(`Failed to read ${relativePath}: ${error.message}`);
+      }
+
+      for (const entry of entries) {
+        if (entry.name === 'resources' && entry.isDirectory()) continue;
+        await fsPromises.rm(path.join(demoDir, entry.name), { recursive: true, force: true });
+      }
+      console.log(`  ✅ Preserved: ${relativePath}/resources`);
+    }
+
+    console.log('');
   }
 
   async addOrReplaceFiles() {
@@ -266,18 +293,13 @@ class ReleasePreparer {
         let content;
         if (config.type === 'file') {
           // Copy from source file
-          if (!fs.existsSync(config.source)) {
-            console.error(`  ❌ Source file not found: ${config.source}`);
-            continue;
-          }
           content = await fsPromises.readFile(config.source);
           await fsPromises.writeFile(fullDestPath, content);
         } else if (config.type === 'content') {
           // Use provided content
           await fsPromises.writeFile(fullDestPath, config.content, 'utf-8');
         } else {
-          console.error(`  ❌ Unknown type for ${destPath}: ${config.type}`);
-          continue;
+          throw new Error(`Unknown replacement type for ${destPath}: ${config.type}`);
         }
         
         if (exists) {
@@ -289,7 +311,7 @@ class ReleasePreparer {
         }
         
       } catch (error) {
-        console.error(`  ❌ Failed to process ${destPath}: ${error.message}`);
+        throw new Error(`Failed to process ${destPath}: ${error.message}`);
       }
     }
     
@@ -314,8 +336,7 @@ class ReleasePreparer {
       try {
         // Check if file exists
         if (!fs.existsSync(fullPath)) {
-          console.log(`  ⏭️  File not found (skipping): ${filePath}`);
-          continue;
+          throw new Error(`Text replacement target not found: ${filePath}`);
         }
         
         // Read file content
@@ -342,11 +363,89 @@ class ReleasePreparer {
         }
         
       } catch (error) {
-        console.error(`  ❌ Failed to modify ${filePath}: ${error.message}`);
+        throw new Error(`Failed to modify ${filePath}: ${error.message}`);
       }
     }
     
     console.log(`\n📊 Text replacements summary: ${modifiedCount} file(s) modified\n`);
+  }
+
+  async validatePreparedRelease() {
+    const removalFailures = CONFIG.filesToRemove.filter(
+      relativePath => fs.existsSync(path.join(this.extractDir, relativePath))
+    );
+    if (removalFailures.length > 0) {
+      throw new Error(`Release still contains paths configured for removal:\n- ${removalFailures.join('\n- ')}`);
+    }
+
+    for (const relativePath of CONFIG.demoDirectories) {
+      const demoDir = path.join(this.extractDir, relativePath);
+      let entries;
+      try {
+        entries = await fsPromises.readdir(demoDir, { withFileTypes: true });
+      } catch (error) {
+        if (error.code === 'ENOENT') continue;
+        throw error;
+      }
+
+      const unexpectedEntries = entries.filter(
+        entry => entry.name !== 'resources' || !entry.isDirectory()
+      );
+      if (unexpectedEntries.length > 0) {
+        throw new Error(
+          `Release contains unexpected demo content in ${relativePath}:\n- ${unexpectedEntries.map(entry => entry.name).join('\n- ')}`
+        );
+      }
+    }
+
+    for (const [destPath, config] of Object.entries(CONFIG.filesToAddOrReplace)) {
+      const actual = await fsPromises.readFile(path.join(this.extractDir, destPath));
+      const expected = config.type === 'file'
+        ? await fsPromises.readFile(config.source)
+        : Buffer.from(config.content, 'utf8');
+
+      if (!actual.equals(expected)) {
+        throw new Error(`Replacement verification failed: ${destPath}`);
+      }
+    }
+
+    const unsafeFiles = [];
+    await this.walkEntries(this.extractDir, async (relativePath, entry) => {
+      if (
+        entry.name === 'ca.key' ||
+        entry.name === '.DS_Store' ||
+        entry.name.startsWith('._')
+      ) {
+        unsafeFiles.push(relativePath);
+      }
+    });
+
+    if (unsafeFiles.length > 0) {
+      throw new Error(`Release contains excluded or sensitive files:\n- ${unsafeFiles.join('\n- ')}`);
+    }
+
+    console.log('✅ Prepared release contents validated\n');
+  }
+
+  async walkEntries(rootDir, callback, relativeDir = '') {
+    const entries = await fsPromises.readdir(path.join(rootDir, relativeDir), { withFileTypes: true });
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+
+    for (const entry of entries) {
+      const relativePath = path.join(relativeDir, entry.name);
+      await callback(relativePath, entry);
+      if (entry.isDirectory()) {
+        await this.walkEntries(rootDir, callback, relativePath);
+      }
+    }
+  }
+
+  async getArchiveEntries() {
+    const archiveEntries = [];
+    await this.walkEntries(this.extractDir, async relativePath => {
+      archiveEntries.push(relativePath.split(path.sep).join('/'));
+    });
+    return archiveEntries;
   }
 
   async createTarball() {
@@ -357,14 +456,20 @@ class ReleasePreparer {
       await fsPromises.unlink(CONFIG.outputTarball);
     }
     
-    // Get all files/directories in the extracted directory
-    const files = await fsPromises.readdir(this.extractDir);
+    const files = await this.getArchiveEntries();
+    const sourceDateEpoch = Number(process.env.SOURCE_DATE_EPOCH || '0');
+    if (!Number.isInteger(sourceDateEpoch) || sourceDateEpoch < 0) {
+      throw new Error('SOURCE_DATE_EPOCH must be a non-negative integer');
+    }
     
     await tar.create(
       {
-        gzip: true,
+        gzip: { level: 9 },
         file: CONFIG.outputTarball,
         cwd: this.extractDir,
+        portable: true,
+        mtime: new Date(sourceDateEpoch * 1000),
+        noDirRecurse: true,
         // Exclude macOS AppleDouble resource fork files (._*)
         filter: (p) => !p.replace(/^\.[\\/]/, '').split(/[\\/]/).filter(Boolean).some(part => part.startsWith('._'))
       },
@@ -376,6 +481,16 @@ class ReleasePreparer {
     const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
     
     console.log(`✅ Created: ${CONFIG.outputTarball} (${sizeMB} MB)\n`);
+  }
+
+  async createChecksum() {
+    const archive = await fsPromises.readFile(CONFIG.outputTarball);
+    const checksum = crypto.createHash('sha256').update(archive).digest('hex');
+    await fsPromises.writeFile(
+      `${CONFIG.outputTarball}.sha256`,
+      `${checksum}  ${path.basename(CONFIG.outputTarball)}\n`,
+      'utf8'
+    );
   }
 
   async cleanup() {
@@ -397,8 +512,8 @@ class ReleasePreparer {
 if (require.main === module) {
   const preparer = new ReleasePreparer();
   preparer.run().catch(error => {
-    console.error('💥 Unexpected error:', error);
-    process.exit(1);
+    console.error('💥 Preparation failed:', error.message);
+    process.exitCode = 1;
   });
 }
 

@@ -141,6 +141,11 @@ class WorkshopRepoCleanup {
 
     console.log('⚠️  WARNING: This action CANNOT be undone!');
     console.log('⚠️  All repository data, issues, pull requests, and history will be permanently lost!');
+
+    if (force) {
+      console.log('✅ Deletion confirmed with --force');
+      return true;
+    }
     
     const rl = readline.createInterface({
       input: process.stdin,
@@ -249,6 +254,10 @@ class WorkshopRepoCleanup {
 
       // Print summary
       this.printSummary();
+
+      if (this.results.failed.length > 0) {
+        throw new Error(`${this.results.failed.length} repository deletion(s) failed`);
+      }
 
     } catch (error) {
       console.error('💥 Cleanup failed:', error.message);
