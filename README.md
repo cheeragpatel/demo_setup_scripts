@@ -1,3 +1,5 @@
+**English** | [Español](README.es.md)
+
 # Workshop Setup Scripts
 
 Automates creation of personalized GitHub Copilot workshop repositories for each attendee in a GitHub organization.
